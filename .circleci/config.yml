@@ -34,11 +34,10 @@ workflows:
           # real shebang for clarity/local testing), SC2038/SC2086 (word-splitting on
           # `find`/unquoted expansion -- not applicable, no `find` piped into a command
           # anywhere in these scripts, and every expansion is intentionally quoted;
-          # excluded to match the exact set CircleCI's own docs recommend), SC2002
-          # (useless cat -- not applicable), SC2016 (single quotes not expanding -- used
-          # intentionally in collect-outputs.sh to defer expansion into the generated
-          # collector script; see the exact recommended exclusion set in the
-          # orb-best-practices spec, section 6).
+          # excluded to match the exact set CircleCI's own orb-authoring docs
+          # recommend), SC2002 (useless cat -- not applicable), SC2016 (single quotes
+          # not expanding -- used intentionally in collect-outputs.sh/create-config.sh
+          # to defer expansion into generated shell/yq source).
           exclude: SC2148,SC2038,SC2086,SC2002,SC2016
           filters: *filters
       - orb-tools/continue:

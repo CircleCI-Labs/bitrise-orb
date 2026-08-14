@@ -1,10 +1,15 @@
+# NOTE: this job's hook parameters are named "before-steps"/"after-steps", not
+# CircleCI's own "pre-steps"/"post-steps" wording. Those two exact strings are reserved
+# job-parameter names -- "circleci orb validate" rejects a job parameter literally named
+# "pre-steps"/"post-steps" outright -- discovered while re-verifying this orb.
 description: >
   Run a single Bitrise Step as its own CircleCI job, on an executor you choose
   explicitly (bitrise/macos or bitrise/machine -- see this orb's README for why there's
   no default). Wraps the `bitrise/step` command and forwards every one of its
-  parameters, plus optional pre-steps/post-steps so you can interleave native CircleCI
-  steps immediately before/after the Bitrise Step -- e.g. reading $BITRISE_IPA_PATH (or
-  any other verbatim Bitrise output env var) that landed in $BASH_ENV.
+  parameters, plus optional before-steps/after-steps so you can interleave native
+  CircleCI steps immediately before/after the Bitrise Step -- e.g. reading
+  $BITRISE_IPA_PATH (or any other verbatim Bitrise output env var) that landed in
+  $BASH_ENV.
 
 parameters:
   executor:
@@ -17,12 +22,12 @@ parameters:
   checkout:
     type: boolean
     default: true
-    description: Check out the project before running anything else in this job, including pre-steps.
-  pre-steps:
+    description: Check out the project before running anything else in this job, including before-steps.
+  before-steps:
     type: steps
     default: []
     description: Steps to run before the Bitrise Step (after checkout, if enabled).
-  post-steps:
+  after-steps:
     type: steps
     default: []
     description: Steps to run after the Bitrise Step and its output export.
@@ -32,7 +37,7 @@ parameters:
       The Bitrise Step reference, passed through to Bitrise verbatim -- no version
       resolution happens in this orb. Supports the full reference grammar:
       "<step-id>@<version>" (resolved against step-lib-source; omit "@<version>" for
-      latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@5".
+      latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@6".
   inputs:
     type: string
     default: ""
@@ -48,6 +53,15 @@ parameters:
       Optional output aliases, as a flat YAML block of "ORIGINAL_OUTPUT_KEY: alias"
       pairs -- Bitrise's own config-level output-aliasing mechanism. Leave empty to
       export every declared output under its verbatim vendor name (the default).
+  extra-outputs:
+    type: string
+    default: ""
+    description: >
+      Additional environment variable NAMES (one per line, no values) to export
+      verbatim, unioned with the Step's declared outputs. Use this for a Step whose
+      step.yml declares no outputs but whose own code still calls `envman add` for one
+      -- e.g. a `script@1` Step -- since this orb only auto-discovers DECLARED outputs
+      by default. See the README's "Outputs" section.
   step-lib-source:
     type: string
     default: "https://github.com/bitrise-io/bitrise-steplib.git"
@@ -69,7 +83,7 @@ parameters:
     default: "/tmp/bitrise-orb/deploy"
     description: >
       Directory exported as $BITRISE_DEPLOY_DIR. Point store_artifacts/store_test_results
-      at this path in a post-steps step to publish whatever the Step deposited there.
+      at this path in an after-steps step to publish whatever the Step deposited there.
   extra-env:
     type: string
     default: ""
@@ -92,11 +106,11 @@ parameters:
   skip-install:
     type: boolean
     default: false
-    description: Skip installing the Bitrise CLI (e.g. a pre-steps step already did).
+    description: Skip installing the Bitrise CLI (e.g. a before-steps step already did).
   skip-map-env:
     type: boolean
     default: false
-    description: Skip exporting the CircleCI -> Bitrise environment mapping (e.g. a pre-steps step already did).
+    description: Skip exporting the CircleCI -> Bitrise environment mapping (e.g. a before-steps step already did).
   skip-collect-outputs:
     type: boolean
     default: false
@@ -109,12 +123,13 @@ steps:
       condition: <<parameters.checkout>>
       steps:
         - checkout
-  - <<parameters.pre-steps>>
+  - <<parameters.before-steps>>
   - step:
       checkout: false
       id: <<parameters.id>>
       inputs: <<parameters.inputs>>
       outputs: <<parameters.outputs>>
+      extra-outputs: <<parameters.extra-outputs>>
       step-lib-source: <<parameters.step-lib-source>>
       bitrise-version: <<parameters.bitrise-version>>
       bin-dir: <<parameters.bin-dir>>
@@ -127,4 +142,4 @@ steps:
       skip-install: <<parameters.skip-install>>
       skip-map-env: <<parameters.skip-map-env>>
       skip-collect-outputs: <<parameters.skip-collect-outputs>>
-  - <<parameters.post-steps>>
+  - <<parameters.after-steps>>

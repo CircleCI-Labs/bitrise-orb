@@ -1,0 +1,47 @@
+description: >
+  Chain two Bitrise Steps that depend on each other's on-disk/keychain state --
+  installing a code-signing certificate, then archiving with it -- inside ONE job, by
+  calling the `bitrise/step` command twice in a hand-rolled job rather than using the
+  `bitrise/step` job wrapper twice. This is the pattern a real migrated iOS release
+  workflow needs, and it matters because two separate `bitrise/step` JOBS run on two
+  independent, ephemeral machines with no shared state -- the keychain
+  certificate-and-profile-installer sets up on job 1 simply does not exist on job 2's
+  fresh machine, unlike Steps inside one Bitrise Workflow, which always share a machine.
+  `checkout: false` plus `skip-install`/`skip-map-env` on the second `bitrise/step` call
+  avoid redoing work the first call already did in this same job.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  jobs:
+    build-signed-ios-app:
+      executor: bitrise/macos
+      steps:
+        - checkout
+        - bitrise/step:
+            checkout: false
+            id: certificate-and-profile-installer@1
+            inputs: |
+              certificate_url: $IOS_CERTIFICATE_URL
+              certificate_passphrase: $IOS_CERTIFICATE_PASSPHRASE
+              provisioning_profile_url: $IOS_PROVISIONING_PROFILE_URL
+        - bitrise/step:
+            checkout: false
+            skip-install: true
+            skip-map-env: true
+            id: xcode-archive@6
+            inputs: |
+              project_path: MyApp.xcworkspace
+              scheme: MyApp
+              distribution_method: app-store
+        - run:
+            name: Use the .ipa Bitrise just built
+            command: echo "xcode-archive produced $BITRISE_IPA_PATH"
+        - store_artifacts:
+            path: /tmp/bitrise-orb/deploy
+  workflows:
+    ios-release:
+      jobs:
+        - build-signed-ios-app:
+            context: ios-signing

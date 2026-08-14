@@ -5,10 +5,11 @@ set -euo pipefail
 # single concrete version string, and writes it to a throwaway file. This file -- not the
 # raw "latest" parameter -- is what the install command's restore_cache/save_cache steps
 # checksum, so a moving "latest" target still gets a stable, correct cache key. This is
-# the exact same "resolve then checksum the resolved value" pattern verified in the
-# act-orb-conventions spec (act-binary-cache.sh / /tmp/.act-version), applied here to the
-# Bitrise CLI's own version instead of a Step's version (this orb never resolves a Step's
-# own version -- see Locked Decision #4 -- this script is purely about our own tooling).
+# the same "resolve then checksum the resolved value" pattern CircleCI-Labs/act-orb uses
+# for its own CLI version (see its src/scripts/act-binary-cache.sh writing
+# /tmp/.act-version), applied here to the Bitrise CLI's own version instead of a Step's
+# version (this orb never resolves a Step's own version -- see Locked Decision #4 --
+# this script is purely about our own tooling).
 
 VERSION_FILE="/tmp/.bitrise-orb-version"
 

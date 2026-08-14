@@ -11,7 +11,7 @@ parameters:
     description: >
       The Bitrise Step reference, passed through verbatim. Supports the full reference
       grammar: "<step-id>@<version>" (resolved against step-lib-source; omit "@<version>"
-      for latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@5".
+      for latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@6".
   inputs:
     type: string
     default: ""

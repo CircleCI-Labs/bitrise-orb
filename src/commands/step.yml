@@ -6,7 +6,7 @@ description: >
   reuse an already-installed CLI or an already-applied env mapping within the same job
   without a breaking change to this command's shape. Most users should reach for the
   `bitrise/step` job instead, which wraps this command with an explicit executor choice
-  and pre-steps/post-steps hooks; use this command directly only if you're composing it
+  and before-steps/after-steps hooks; use this command directly only if you're composing it
   into a hand-rolled job of your own.
 
 parameters:
@@ -20,7 +20,7 @@ parameters:
       The Bitrise Step reference, passed through to Bitrise verbatim -- no version
       resolution happens in this orb. Supports the full reference grammar:
       "<step-id>@<version>" (resolved against step-lib-source; omit "@<version>" for
-      latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@5".
+      latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@6".
   inputs:
     type: string
     default: ""
@@ -36,6 +36,15 @@ parameters:
       Optional output aliases, as a flat YAML block of "ORIGINAL_OUTPUT_KEY: alias"
       pairs -- Bitrise's own config-level output-aliasing mechanism. Leave empty to
       export every declared output under its verbatim vendor name (the default).
+  extra-outputs:
+    type: string
+    default: ""
+    description: >
+      Additional environment variable NAMES (one per line, no values) to export
+      verbatim, unioned with the Step's declared outputs. Use this for a Step whose
+      step.yml declares no outputs but whose own code still calls `envman add` for one
+      -- e.g. a `script@1` Step -- since this orb only auto-discovers DECLARED outputs
+      by default. See the README's "Outputs" section.
   step-lib-source:
     type: string
     default: "https://github.com/bitrise-io/bitrise-steplib.git"
@@ -125,6 +134,7 @@ steps:
         - collect-outputs:
             id: <<parameters.id>>
             outputs: <<parameters.outputs>>
+            extra-outputs: <<parameters.extra-outputs>>
             step-lib-source: <<parameters.step-lib-source>>
             config-path: <<parameters.config-path>>
             workflow-name: <<parameters.workflow-name>>

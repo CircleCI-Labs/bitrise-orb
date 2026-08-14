@@ -98,14 +98,13 @@ workflows:
 
       # Proves this orb's single most load-bearing, least-obvious mechanism end to end,
       # on Linux, with no credentials, every single run: a Step's declared `envman add`
-      # output genuinely lands in $BASH_ENV as a real shell variable a post-steps step
-      # (or any later native step) can read. Mirrors the exact fixture-based methodology
-      # the bitrise-cli-handson spike report itself used to verify this mechanism.
+      # output genuinely lands in $BASH_ENV as a real shell variable an after-steps step
+      # (or any later native step) can read.
       - bitrise/step:
           name: "Testing Output Export (path:: fixture, machine)"
           executor: bitrise/machine
           id: "path::./test/fixtures/local-step"
-          post-steps:
+          after-steps:
             - run:
                 name: Verify LOCAL_STEP_OUT was exported to BASH_ENV
                 command: |
@@ -114,6 +113,33 @@ workflows:
                     exit 1
                   fi
                   echo "OK: LOCAL_STEP_OUT=${LOCAL_STEP_OUT}"
+          filters: *filters
+
+      # Proves the "extra-outputs" escape hatch (the reviewing architect's finding): a
+      # plain `script@1` Step declares ZERO outputs in its own step.yml, yet the value it
+      # `envman add`s is still exported to $BASH_ENV once named via extra-outputs -- the
+      # single most common thing a migrating Bitrise user will try (see the README's
+      # "Outputs" section).
+      - bitrise/step:
+          name: "Testing extra-outputs (script@1 + envman add, machine)"
+          executor: bitrise/machine
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              envman add --key SMOKE_OUT --value "produced_by_script_step"
+          extra-outputs: |
+            SMOKE_OUT
+          after-steps:
+            - run:
+                name: Verify SMOKE_OUT was exported to BASH_ENV
+                command: |
+                  if [ "${SMOKE_OUT:-}" != "produced_by_script_step" ]; then
+                    echo "Expected SMOKE_OUT=produced_by_script_step, got '${SMOKE_OUT:-<unset>}'" >&2
+                    exit 1
+                  fi
+                  echo "OK: SMOKE_OUT=${SMOKE_OUT}"
           filters: *filters
 
       - test-certificate-and-profile-installer:
@@ -129,6 +155,7 @@ workflows:
           requires:
             - "Testing Script Step (machine, no credentials)"
             - "Testing Output Export (path:: fixture, machine)"
+            - "Testing extra-outputs (script@1 + envman add, machine)"
             - test-certificate-and-profile-installer
             - test-sign-apk
 

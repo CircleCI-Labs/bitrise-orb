@@ -1,9 +1,10 @@
 description: >
   Discover the Step's declared output keys (via `stepman step-info`, reading the
-  activated Step's own step.yml -- no maintained list, no guessing) and append a Step to
-  the synthesized bitrise.yml that exports each one into $BASH_ENV under its verbatim
-  vendor name (or its alias, if "outputs" set one), immediately after the target Step.
-  Must run after create-config and before run-bitrise, against the same config-path.
+  activated Step's own step.yml -- no maintained list, no guessing), union them with any
+  "extra-outputs" named explicitly, and append a Step to the synthesized bitrise.yml that
+  exports each one into $BASH_ENV under its verbatim vendor name (or its alias, if
+  "outputs" set one), immediately after the target Step. Must run after create-config and
+  before run-bitrise, against the same config-path.
 
 parameters:
   id:
@@ -13,6 +14,15 @@ parameters:
     type: string
     default: ""
     description: The same output-alias block passed to create-config.
+  extra-outputs:
+    type: string
+    default: ""
+    description: >
+      Additional environment variable NAMES (one per line, no values) to export
+      verbatim, unioned with the Step's declared outputs. Use this for a Step whose
+      step.yml declares no outputs but whose own code still calls `envman add` for one
+      -- e.g. a `script@1` Step -- since this orb only auto-discovers DECLARED outputs
+      by default. See the README's "Outputs" section.
   step-lib-source:
     type: string
     default: "https://github.com/bitrise-io/bitrise-steplib.git"
@@ -32,6 +42,7 @@ steps:
       environment:
         ORB_VAL_ID: <<parameters.id>>
         ORB_VAL_OUTPUTS: <<parameters.outputs>>
+        ORB_VAL_EXTRA_OUTPUTS: <<parameters.extra-outputs>>
         ORB_VAL_STEP_LIB_SOURCE: <<parameters.step-lib-source>>
         ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
         ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>

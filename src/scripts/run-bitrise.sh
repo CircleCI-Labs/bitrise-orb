@@ -17,8 +17,8 @@ if [[ ! -f "${ORB_VAL_CONFIG_PATH}" ]]; then
   exit 1
 fi
 
-# `--ci` (before the subcommand, matching the exact invocation verified live in the
-# hands-on CLI spike report) suppresses interactive prompts, e.g. the `deps:` apt-get
-# confirmation prompt some Steps trigger.
+# `--ci` (before the subcommand) suppresses interactive prompts, e.g. the `deps:`
+# apt-get confirmation prompt some Steps trigger -- confirmed against `bitrise run
+# --help`'s own flag documentation.
 echo "Running: bitrise --ci run \"${ORB_VAL_WORKFLOW_NAME}\" --config \"${ORB_VAL_CONFIG_PATH}\""
 bitrise --ci run "${ORB_VAL_WORKFLOW_NAME}" --config "${ORB_VAL_CONFIG_PATH}"

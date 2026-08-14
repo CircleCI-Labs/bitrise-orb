@@ -3,9 +3,9 @@ description: >
   signing, most fastlane/Gradle/Flutter work, plain script Steps). There is no default
   `bitrise/executor` for this orb -- see the bitrise/macos executor and this repo's
   README for why. Must be an x86_64/amd64 resource class: the Bitrise CLI has no Linux
-  arm64 release (verified in the hands-on CLI spike report), and this orb's install
-  command fails fast with a clear error rather than let that surface as a confusing
-  download 404 if you point it at an arm resource class.
+  arm64 release (bitrise-io/bitrise's GitHub releases publish only a Linux x86_64
+  asset), and this orb's install command fails fast with a clear error rather than let
+  that surface as a confusing download 404 if you point it at an arm resource class.
 
 parameters:
   image:
@@ -19,7 +19,7 @@ parameters:
   docker-layer-caching:
     type: boolean
     default: false
-    description: Enable Docker layer caching for this executor (only useful if pre-steps/post-steps you add also use Docker).
+    description: Enable Docker layer caching for this executor (only useful if before-steps/after-steps you add also use Docker).
 
 machine:
   image: <<parameters.image>>
