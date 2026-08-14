@@ -79,7 +79,7 @@ fi
 echo "Discovering declared outputs via: stepman ${STEPMAN_ARGS[*]}"
 STEP_INFO_JSON=""
 STEPMAN_ERR_FILE="$(mktemp)"
-if OUTPUT="$(stepman "${STEPMAN_ARGS[@]}" 2> "${STEPMAN_ERR_FILE}")"; then
+if OUTPUT="$(stepman "${STEPMAN_ARGS[@]}" 2>"${STEPMAN_ERR_FILE}")"; then
   STEP_INFO_JSON="${OUTPUT}"
 else
   # Output discovery is a convenience layered on top of running the Step, not a

@@ -36,9 +36,9 @@ flat_to_list() {
   # under `set -e` that could abort this whole script instead of just meaning "no inputs".
   local flat_stripped="${flat//[$' \t\n']/}"
   if [[ -z "${flat_stripped}" ]]; then
-    echo '[]' > "${out_file}"
+    echo '[]' >"${out_file}"
   else
-    printf '%s\n' "${flat}" | yq eval 'to_entries | map({(.key): .value})' - > "${out_file}"
+    printf '%s\n' "${flat}" | yq eval 'to_entries | map({(.key): .value})' - >"${out_file}"
   fi
 }
 
@@ -56,7 +56,7 @@ flat_to_list "${SUBST_OUTPUTS}" "${OUTPUTS_LIST_FILE}"
 STEP_BLOCK_FILE="${WORK_DIR}/.step-block.yml"
 ORB_VAL_ID="${ORB_VAL_ID}" INPUTS_LIST_FILE="${INPUTS_LIST_FILE}" \
   yq eval -n '{(strenv(ORB_VAL_ID)): {"inputs": load(strenv(INPUTS_LIST_FILE))}}' \
-  > "${STEP_BLOCK_FILE}"
+  >"${STEP_BLOCK_FILE}"
 
 if [[ "$(yq eval 'length' "${OUTPUTS_LIST_FILE}")" != "0" ]]; then
   # Bitrise's own config-level output aliasing (`outputs: - ORIGINAL_KEY: alias`).
@@ -83,7 +83,7 @@ STEP_LIB_SOURCE="${ORB_VAL_STEP_LIB_SOURCE}" WORKFLOW_NAME="${ORB_VAL_WORKFLOW_N
         "steps": [load(strenv(STEP_BLOCK_FILE))]
       }
     }
-  }' > "${ORB_VAL_CONFIG_PATH}"
+  }' >"${ORB_VAL_CONFIG_PATH}"
 
 echo "Synthesized bitrise.yml at ${ORB_VAL_CONFIG_PATH}:"
 cat "${ORB_VAL_CONFIG_PATH}"

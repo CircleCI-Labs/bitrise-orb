@@ -37,7 +37,7 @@ if [[ "${OS}" == "Linux" && "${ARCH}" == "arm64" ]]; then
   exit 1
 fi
 
-if ! command -v jq > /dev/null 2>&1; then
+if ! command -v jq >/dev/null 2>&1; then
   echo "bitrise-orb: this orb requires 'jq' on PATH (used to parse stepman's JSON output)." >&2
   echo "jq ships preinstalled on CircleCI's cimg/* and machine images; install it first if you're on a custom image." >&2
   exit 1
@@ -48,7 +48,7 @@ if [[ "${BITRISE_VERSION_TAG}" != v* ]]; then
   BITRISE_VERSION_TAG="v${BITRISE_VERSION_TAG}"
 fi
 
-if [[ -x "${ORB_VAL_BIN_DIR}/bitrise" ]] && "${ORB_VAL_BIN_DIR}/bitrise" --version 2> /dev/null | grep -qF "${BITRISE_VERSION_TAG#v}"; then
+if [[ -x "${ORB_VAL_BIN_DIR}/bitrise" ]] && "${ORB_VAL_BIN_DIR}/bitrise" --version 2>/dev/null | grep -qF "${BITRISE_VERSION_TAG#v}"; then
   echo "bitrise CLI ${BITRISE_VERSION_TAG} already present at ${ORB_VAL_BIN_DIR}/bitrise (cache hit) -- skipping download."
 else
   BITRISE_URL="https://github.com/bitrise-io/bitrise/releases/download/${BITRISE_VERSION_TAG}/bitrise-${OS}-${ARCH}"
@@ -74,7 +74,7 @@ fi
 # https://github.com/mikefarah/yq/releases still publishes assets under this
 # yq_<os>_<arch> naming, before the first real release of this orb.
 YQ_VERSION="v4.44.3"
-if [[ -x "${ORB_VAL_BIN_DIR}/yq" ]] && "${ORB_VAL_BIN_DIR}/yq" --version 2> /dev/null | grep -qF "${YQ_VERSION}"; then
+if [[ -x "${ORB_VAL_BIN_DIR}/yq" ]] && "${ORB_VAL_BIN_DIR}/yq" --version 2>/dev/null | grep -qF "${YQ_VERSION}"; then
   echo "yq ${YQ_VERSION} already present at ${ORB_VAL_BIN_DIR}/yq (cache hit) -- skipping download."
 else
   YQ_OS="$(echo "${OS}" | tr '[:upper:]' '[:lower:]')"
@@ -93,7 +93,7 @@ fi
 # own bin-dir and stepman/envman's install dir need to be on PATH for every later step.
 {
   echo "export PATH=\"${ORB_VAL_BIN_DIR}:\$HOME/.bitrise/tools:\$PATH\""
-} >> "$BASH_ENV"
+} >>"$BASH_ENV"
 export PATH="${ORB_VAL_BIN_DIR}:$HOME/.bitrise/tools:$PATH"
 
 if [[ "${OS}" == "Linux" ]]; then
@@ -104,7 +104,7 @@ if [[ "${OS}" == "Linux" ]]; then
   # bitrise/envman/stepman. Whether CircleCI's own machine-executor Ubuntu images ship
   # rsync by default was explicitly NOT verified -- install it defensively and cheaply
   # here rather than fail deep inside stepman's own activation logic later.
-  if ! command -v rsync > /dev/null 2>&1; then
+  if ! command -v rsync >/dev/null 2>&1; then
     echo "Installing rsync (required by stepman to activate Bitrise Steps)..."
     if [[ "${EUID}" == 0 ]]; then
       SUDO_CMD=""

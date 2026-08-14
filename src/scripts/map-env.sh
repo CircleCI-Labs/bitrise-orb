@@ -12,7 +12,7 @@ set -euo pipefail
 # accordingly, not against "true"/"false".
 
 mkdir -p "${ORB_VAL_DEPLOY_DIR}"
-echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >> "$BASH_ENV"
+echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >>"$BASH_ENV"
 
 if [[ "${ORB_VAL_SKIP_DEFAULT_MAPPING}" != "1" ]]; then
   echo "Mapping CircleCI's built-in environment variables onto their Bitrise equivalents..."
@@ -23,7 +23,7 @@ if [[ "${ORB_VAL_SKIP_DEFAULT_MAPPING}" != "1" ]]; then
     [[ -n "${CIRCLE_TAG:-}" ]] && echo "export BITRISE_GIT_TAG=$(printf '%q' "${CIRCLE_TAG}")"
     [[ -n "${CIRCLE_BUILD_NUM:-}" ]] && echo "export BITRISE_BUILD_NUMBER=$(printf '%q' "${CIRCLE_BUILD_NUM}")"
     [[ -n "${CIRCLE_PROJECT_REPONAME:-}" ]] && echo "export BITRISE_APP_TITLE=$(printf '%q' "${CIRCLE_PROJECT_REPONAME}")"
-  } >> "$BASH_ENV"
+  } >>"$BASH_ENV"
 else
   echo "skip-default-mapping is true -- not exporting the built-in CircleCI -> Bitrise environment mapping."
 fi
@@ -46,8 +46,8 @@ if [[ -n "${ORB_VAL_EXTRA_ENV// /}" ]]; then
     value="${line#*:}"
     value="${value# }"
     [[ -z "${key}" ]] && continue
-    echo "export ${key}=$(printf '%q' "${value}")" >> "$BASH_ENV"
-  done <<< "${SUBSTITUTED_EXTRA_ENV}"
+    echo "export ${key}=$(printf '%q' "${value}")" >>"$BASH_ENV"
+  done <<<"${SUBSTITUTED_EXTRA_ENV}"
 fi
 
 echo "bitrise-orb environment mapping applied. Exported BITRISE_* variables:"
