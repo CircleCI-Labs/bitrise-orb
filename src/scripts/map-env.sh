@@ -4,18 +4,37 @@ set -euo pipefail
 # Parameters, via `environment:`:
 #   ORB_VAL_DEPLOY_DIR             -- directory to create and export as $BITRISE_DEPLOY_DIR
 #   ORB_VAL_EXTRA_ENV              -- flat "NAME: value" YAML block of extra/override env vars, or ""
-#   ORB_VAL_SKIP_DEFAULT_MAPPING   -- "1"/"0" (boolean-as-string, see below)
+#   ORB_VAL_SKIP_DEFAULT_MAPPING   -- boolean-as-string, "1"/"0" OR "true"/"false" (see below)
 #
-# NOTE on booleans: CircleCI interpolates a boolean-typed parameter inside an
-# `environment:` value as the literal string "0" or "1", never "true"/"false" -- the same
-# convention CircleCI-Labs/act-orb's own run-act.sh compares against (its boolean flags,
-# e.g. ORB_VAL_REUSE, are checked with `[ "${ORB_VAL_X}" = "1" ]`). Compare against
-# "1"/"0" accordingly, not against "true"/"false".
+# NOTE on booleans -- DO NOT "simplify" this to a single comparison.
+# A boolean orb parameter interpolated into an `environment:` value does NOT render
+# consistently. Both of these have been observed in real pipelines:
+#   * a PUBLISHED registry orb yields "1" / "0"
+#   * an INLINE orb (what you use while developing) yields "true" / "false"
+# That asymmetry is the trap: the same code works inline, then silently stops working once
+# published. CircleCI-Labs/act-orb hit exactly this and switched to "1"/"0" in commit 44ffcf8.
+#
+# The underlying rule, per Gordon Syme (CircleCI pipelines team) in #pipelines-eng-team:
+# when `<< parameters.x >>` is the ENTIRE template the value is passed through as-is with its
+# type preserved; when it appears inside a LARGER string it is stringified. That type
+# preservation is what lets the two paths diverge downstream. CircleCI's own docs only hedge
+# with "Boolean values may be returned as a '1' for True and '0' for False."
+#
+# So: accept BOTH forms, always. And prefer a YAML `when:` condition over a shell string
+# compare where the branch can live in config -- `when:` evaluates the boolean natively and
+# is immune to this entire class of bug (this orb's skip-install/skip-map-env/
+# skip-collect-outputs parameters already do it that way).
+orb_bool_is_true() {
+  case "${1:-}" in
+    1 | true | True | TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 mkdir -p "${ORB_VAL_DEPLOY_DIR}"
 echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >>"$BASH_ENV"
 
-if [[ "${ORB_VAL_SKIP_DEFAULT_MAPPING}" != "1" ]]; then
+if ! orb_bool_is_true "${ORB_VAL_SKIP_DEFAULT_MAPPING:-}"; then
   echo "Mapping CircleCI's built-in environment variables onto their Bitrise equivalents..."
   {
     echo "export BITRISE_SOURCE_DIR=$(printf '%q' "$(pwd)")"
