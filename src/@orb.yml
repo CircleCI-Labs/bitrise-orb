@@ -1,0 +1,11 @@
+version: 2.1
+
+description: >
+  Run a single Bitrise Step natively inside an otherwise-native CircleCI job, with no
+  bitrise.io account or token. Lets teams migrating off Bitrise, or teams that just want a
+  specific Bitrise Step (iOS code signing, Xcode archiving, fastlane, Android signing),
+  reuse it as-is instead of rewriting it in shell.
+
+display:
+  home_url: "https://bitrise.io/"
+  source_url: "https://github.com/CircleCI-Labs/bitrise-orb"

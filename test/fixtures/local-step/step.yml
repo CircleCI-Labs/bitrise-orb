@@ -1,0 +1,16 @@
+title: "bitrise-orb test fixture: local step"
+summary: |-
+  A minimal Step used only by this repo's own CI, referenced via
+  `path::./test/fixtures/local-step`. Not part of the published orb.
+description: |
+  Proves this orb's output-export mechanism end to end, on Linux, with no credentials:
+  it calls `envman add` for one declared output, and .circleci/test-deploy.yml verifies
+  that the collect-outputs command correctly exports that value into $BASH_ENV.
+website: https://github.com/CircleCI-Labs/bitrise-orb
+source_code_url: https://github.com/CircleCI-Labs/bitrise-orb
+support_url: https://github.com/CircleCI-Labs/bitrise-orb/issues
+
+outputs:
+- LOCAL_STEP_OUT:
+  opts:
+    title: A value produced by the local test fixture Step

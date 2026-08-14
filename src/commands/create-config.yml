@@ -1,0 +1,58 @@
+description: >
+  Synthesize a minimal, throwaway bitrise.yml containing exactly one Step -- the one
+  described by the "id"/"inputs"/"outputs" parameters -- in the workflow named
+  "workflow-name". Converts the flat "key: value" inputs/outputs blocks into Bitrise's
+  list-of-single-key-maps shape, and resolves any "$SECRET"-style references inside them
+  via `circleci env subst` before they're written to disk.
+
+parameters:
+  id:
+    type: string
+    description: >
+      The Bitrise Step reference, passed through verbatim. Supports the full reference
+      grammar: "<step-id>@<version>" (resolved against step-lib-source; omit "@<version>"
+      for latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@5".
+  inputs:
+    type: string
+    default: ""
+    description: >
+      The Step's inputs, as a flat YAML block of "key: value" pairs, one Step input per
+      line (values may be multi-line YAML block scalars). Example:
+      "project_path: MyApp.xcworkspace\nscheme: MyApp".
+  outputs:
+    type: string
+    default: ""
+    description: >
+      Optional output aliases, as a flat YAML block of "ORIGINAL_OUTPUT_KEY: alias" pairs
+      -- Bitrise's own config-level output-aliasing mechanism. Leave empty to export every
+      declared output under its verbatim vendor name (the default -- see this orb's README).
+  step-lib-source:
+    type: string
+    default: "https://github.com/bitrise-io/bitrise-steplib.git"
+    description: The StepLib git URL to resolve "id" against when it has no explicit "<source>::" prefix and isn't a "git::"/"path::" reference.
+  config-path:
+    type: string
+    default: ".bitrise-orb.generated.yml"
+    description: >
+      Where the synthesized, throwaway bitrise.yml is written. Defaults to a bare
+      filename (landing in the job's working directory, i.e. your checkout) rather than
+      a /tmp path on purpose: Bitrise resolves a "path::<local-path>" Step reference
+      relative to the bitrise.yml's own directory, so keeping this file inside your
+      checkout is what makes "path::./my-local-step"-style references behave the way
+      they would in a real bitrise.yml.
+  workflow-name:
+    type: string
+    default: "orb-step"
+    description: Name of the single workflow inside the synthesized bitrise.yml.
+
+steps:
+  - run:
+      name: "Synthesizing bitrise.yml for << parameters.id >>"
+      environment:
+        ORB_VAL_ID: <<parameters.id>>
+        ORB_VAL_INPUTS: <<parameters.inputs>>
+        ORB_VAL_OUTPUTS: <<parameters.outputs>>
+        ORB_VAL_STEP_LIB_SOURCE: <<parameters.step-lib-source>>
+        ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
+        ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>
+      command: <<include(scripts/create-config.sh)>>

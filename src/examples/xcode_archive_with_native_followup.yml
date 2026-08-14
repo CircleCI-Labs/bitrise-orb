@@ -1,0 +1,37 @@
+description: >
+  Run Bitrise's "xcode-archive" Step to produce a signed .ipa, then read the verbatim
+  $BITRISE_IPA_PATH output it declares directly from a native `run` step right after it
+  -- no bitrise.io account, no separate artifact-download step. This is this orb's
+  single most important feature: interleaving a Bitrise Step with otherwise-native
+  CircleCI steps in one job. Composes the `bitrise/step` command directly into a
+  hand-rolled job (rather than using the `bitrise/step` job wrapper) specifically to show
+  both a Bitrise Step and a plain native step living side by side in the same job.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  jobs:
+    build-ios-app:
+      executor: bitrise/macos
+      steps:
+        - checkout
+        - bitrise/step:
+            checkout: false
+            id: xcode-archive@5
+            inputs: |
+              project_path: MyApp.xcworkspace
+              scheme: MyApp
+              distribution_method: app-store
+        - run:
+            name: Use the .ipa Bitrise just built
+            command: |
+              echo "xcode-archive produced: $BITRISE_IPA_PATH"
+              ls -la "$BITRISE_IPA_PATH"
+        - store_artifacts:
+            path: /tmp/bitrise-orb/deploy
+  workflows:
+    ios-release:
+      jobs:
+        - build-ios-app:
+            context: ios-signing

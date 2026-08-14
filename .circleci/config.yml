@@ -1,0 +1,49 @@
+version: 2.1
+setup: true
+
+orbs:
+  orb-tools: circleci/orb-tools@12.3
+  shellcheck: circleci/shellcheck@3.2
+
+filters: &filters
+  tags:
+    only: /.*/
+
+workflows:
+  lint-pack:
+    jobs:
+      - orb-tools/lint:
+          filters: *filters
+      - orb-tools/pack:
+          filters: *filters
+      - orb-tools/review:
+          orb_name: bitrise
+          # RC010 flags component filenames/parameter keys that aren't snake_case. This
+          # orb deliberately uses kebab-case for every parameter/command/job/executor
+          # name (e.g. "bin-dir", "step-lib-source", "cache-key-prefix") -- the dominant,
+          # human-readable convention across CircleCI's own published orbs, and the
+          # convention this orb's design spec explicitly mandates, matching
+          # CircleCI-Labs/act-orb (which excludes the same rule for the same reason).
+          # Every other RC rule runs with zero exclusions.
+          exclude: "RC010"
+          filters: *filters
+      - shellcheck/check:
+          # SC2148 (missing shebang -- these are <<include(...)>>'d into a `command:`
+          # that already runs under a shell, not executed as standalone scripts by
+          # shellcheck's own #!-detection, though every script here still carries a
+          # real shebang for clarity/local testing), SC2038/SC2086 (word-splitting on
+          # `find`/unquoted expansion -- not applicable, no `find` piped into a command
+          # anywhere in these scripts, and every expansion is intentionally quoted;
+          # excluded to match the exact set CircleCI's own docs recommend), SC2002
+          # (useless cat -- not applicable), SC2016 (single quotes not expanding -- used
+          # intentionally in collect-outputs.sh to defer expansion into the generated
+          # collector script; see the exact recommended exclusion set in the
+          # orb-best-practices spec, section 6).
+          exclude: SC2148,SC2038,SC2086,SC2002,SC2016
+          filters: *filters
+      - orb-tools/continue:
+          pipeline_number: << pipeline.number >>
+          vcs_type: << pipeline.project.type >>
+          orb_name: bitrise
+          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          filters: *filters

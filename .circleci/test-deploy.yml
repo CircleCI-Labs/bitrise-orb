@@ -1,0 +1,154 @@
+# Continuation config, injected with the freshly-packed dev orb by orb-tools/continue
+# (see .circleci/config.yml). Two contexts must exist in this org before this pipeline
+# can run cleanly:
+#   - "orb-publishing"          -- holds the CIRCLE_TOKEN/GHI_TOKEN this orb's own
+#                                  publish jobs need. Standard orb-tools requirement,
+#                                  restrict it to approved branches/users.
+#   - "bitrise-orb-mobile-testing" -- OPTIONAL real (or throwaway) iOS/Android signing
+#                                  fixtures for the two credential-gated integration
+#                                  tests below. It's fine for this context to exist with
+#                                  zero secrets in it -- both gated tests detect the
+#                                  missing env vars and skip themselves cleanly via
+#                                  `circleci-agent step halt` rather than fail. It must
+#                                  still exist, though, or attaching it to a job fails
+#                                  pipeline validation outright.
+version: 2.1
+
+orbs:
+  orb-tools: circleci/orb-tools@12.3
+  bitrise: {} # <- the just-packed dev orb is injected here at continuation time
+
+filters: &filters
+  tags:
+    only: /.*/
+
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+jobs:
+  # Tier 1 target, gated: certificate-and-profile-installer needs a real (or throwaway)
+  # .p12 certificate + .mobileprovision profile to do anything meaningful. No such
+  # fixture exists in this sandboxed authoring pass (Rule: "do not invent... mark
+  # anything unverified explicitly" -- fabricating one here would be worse than not
+  # testing it at all), so this job checks for it and skips itself via the documented
+  # `circleci-agent step halt` mechanism, exactly like orb-tools/publish's own
+  # pub_type: production skips (not fails) when no release tag is present.
+  test-certificate-and-profile-installer:
+    executor: bitrise/macos
+    steps:
+      - checkout
+      - run:
+          name: Check for iOS signing test credentials
+          command: |
+            if [ -z "${IOS_TEST_CERTIFICATE_URL:-}" ]; then
+              echo "IOS_TEST_CERTIFICATE_URL is not set in the bitrise-orb-mobile-testing context -- skipping the certificate-and-profile-installer integration test."
+              echo "Add real (or throwaway) iOS signing test fixtures to that context to exercise this test for real."
+              circleci-agent step halt
+            fi
+      - bitrise/step:
+          checkout: false
+          id: certificate-and-profile-installer@1
+          inputs: |
+            certificate_url: $IOS_TEST_CERTIFICATE_URL
+            certificate_passphrase: $IOS_TEST_CERTIFICATE_PASSPHRASE
+
+  # Tier 1 target, gated: sign-apk needs a real keystore + an APK to sign. Same
+  # reasoning as above -- present, exercised the moment real fixtures exist in the
+  # context, skipped cleanly until then.
+  test-sign-apk:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - run:
+          name: Check for Android signing test credentials
+          command: |
+            if [ -z "${ANDROID_TEST_KEYSTORE_URL:-}" ]; then
+              echo "ANDROID_TEST_KEYSTORE_URL is not set in the bitrise-orb-mobile-testing context -- skipping the sign-apk integration test."
+              echo "Add a real (or throwaway) Android keystore + test APK to that context to exercise this test for real."
+              circleci-agent step halt
+            fi
+      - bitrise/step:
+          checkout: false
+          id: sign-apk@2
+          inputs: |
+            android_app: $ANDROID_TEST_APK_PATH
+            keystore_url: $ANDROID_TEST_KEYSTORE_URL
+            keystore_password: $ANDROID_TEST_KEYSTORE_PASSWORD
+            keystore_alias: $ANDROID_TEST_KEYSTORE_ALIAS
+            private_key_password: $ANDROID_TEST_KEY_PASSWORD
+
+workflows:
+  test-deploy:
+    jobs:
+      # Required minimum per this project's brief: a Linux, no-credentials test so CI is
+      # genuinely green without any Apple/Google secrets configured anywhere.
+      - bitrise/step:
+          name: "Testing Script Step (machine, no credentials)"
+          executor: bitrise/machine
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              echo "hello from bitrise, orchestrated by CircleCI"
+          filters: *filters
+
+      # Proves this orb's single most load-bearing, least-obvious mechanism end to end,
+      # on Linux, with no credentials, every single run: a Step's declared `envman add`
+      # output genuinely lands in $BASH_ENV as a real shell variable a post-steps step
+      # (or any later native step) can read. Mirrors the exact fixture-based methodology
+      # the bitrise-cli-handson spike report itself used to verify this mechanism.
+      - bitrise/step:
+          name: "Testing Output Export (path:: fixture, machine)"
+          executor: bitrise/machine
+          id: "path::./test/fixtures/local-step"
+          post-steps:
+            - run:
+                name: Verify LOCAL_STEP_OUT was exported to BASH_ENV
+                command: |
+                  if [ "${LOCAL_STEP_OUT:-}" != "produced_by_local_step" ]; then
+                    echo "Expected LOCAL_STEP_OUT=produced_by_local_step, got '${LOCAL_STEP_OUT:-<unset>}'" >&2
+                    exit 1
+                  fi
+                  echo "OK: LOCAL_STEP_OUT=${LOCAL_STEP_OUT}"
+          filters: *filters
+
+      - test-certificate-and-profile-installer:
+          filters: *filters
+          context: bitrise-orb-mobile-testing
+
+      - test-sign-apk:
+          filters: *filters
+          context: bitrise-orb-mobile-testing
+
+      - orb-tools/pack:
+          filters: *filters
+          requires:
+            - "Testing Script Step (machine, no credentials)"
+            - "Testing Output Export (path:: fixture, machine)"
+            - test-certificate-and-profile-installer
+            - test-sign-apk
+
+      - orb-tools/publish:
+          name: "Publish Dev"
+          orb_name: cci-labs/bitrise
+          vcs_type: << pipeline.project.type >>
+          pub_type: dev
+          requires: [orb-tools/pack]
+          context: orb-publishing
+          release_environment: orbs-dev
+          github_token: GHI_TOKEN
+
+      - orb-tools/publish:
+          name: "Publish Production"
+          orb_name: cci-labs/bitrise
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          requires: [orb-tools/pack]
+          context: orb-publishing
+          filters: *release-filters
+          release_environment: orbs-prod
+          github_token: GHI_TOKEN

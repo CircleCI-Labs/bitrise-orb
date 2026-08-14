@@ -1,0 +1,28 @@
+description: >
+  Sign an Android APK with Bitrise's "sign-apk" Step (StepLib id "sign-apk" -- its
+  display title is "Android Sign", but that title is not a valid step reference) on the
+  cheap Linux bitrise/machine executor, no Xcode/macOS involved. Input names below were
+  confirmed against sign-apk@2's real, live step.yml via `stepman step-info` while
+  authoring this orb -- but this orb still passes every input through verbatim and does
+  not validate them (Locked Decision #5), so if a future Step version renames/adds
+  inputs, re-check with the same `stepman step-info` command or the Bitrise StepLib
+  catalog rather than trusting this example forever.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  workflows:
+    android-release:
+      jobs:
+        - bitrise/step:
+            name: Sign Android APK
+            executor: bitrise/machine
+            context: android-signing
+            id: sign-apk@2
+            inputs: |
+              android_app: app/build/outputs/apk/release/app-release-unsigned.apk
+              keystore_url: $ANDROID_KEYSTORE_URL
+              keystore_password: $ANDROID_KEYSTORE_PASSWORD
+              keystore_alias: $ANDROID_KEYSTORE_ALIAS
+              private_key_password: $ANDROID_KEY_PASSWORD

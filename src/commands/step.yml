@@ -1,0 +1,133 @@
+description: >
+  Run exactly one Bitrise Step inside this job, using the Bitrise CLI locally -- no
+  bitrise.io account or token. Composes this orb's install / create-config / map-env /
+  collect-outputs / run-bitrise commands in the one order that makes the whole thing work
+  end to end. Each stage can be individually skipped so a future multi-Step orb call can
+  reuse an already-installed CLI or an already-applied env mapping within the same job
+  without a breaking change to this command's shape. Most users should reach for the
+  `bitrise/step` job instead, which wraps this command with an explicit executor choice
+  and pre-steps/post-steps hooks; use this command directly only if you're composing it
+  into a hand-rolled job of your own.
+
+parameters:
+  checkout:
+    type: boolean
+    default: true
+    description: Check out the project before running anything else. Disable if you've already checked out earlier in this job (e.g. the bitrise/step job already did).
+  id:
+    type: string
+    description: >
+      The Bitrise Step reference, passed through to Bitrise verbatim -- no version
+      resolution happens in this orb. Supports the full reference grammar:
+      "<step-id>@<version>" (resolved against step-lib-source; omit "@<version>" for
+      latest), "git::<url>@<ref>", or "path::<local-path>". Example: "xcode-archive@5".
+  inputs:
+    type: string
+    default: ""
+    description: >
+      The Step's inputs, as a flat YAML block of "key: value" pairs, one Step input per
+      line (values may be multi-line YAML block scalars). Run through `circleci env
+      subst` before use, so "$MY_SECRET" resolves at runtime -- secrets never need to
+      enter this config. Example: "project_path: MyApp.xcworkspace\nscheme: MyApp".
+  outputs:
+    type: string
+    default: ""
+    description: >
+      Optional output aliases, as a flat YAML block of "ORIGINAL_OUTPUT_KEY: alias"
+      pairs -- Bitrise's own config-level output-aliasing mechanism. Leave empty to
+      export every declared output under its verbatim vendor name (the default).
+  step-lib-source:
+    type: string
+    default: "https://github.com/bitrise-io/bitrise-steplib.git"
+    description: The StepLib git URL to resolve "id" against when it has no explicit "<source>::" prefix and isn't a "git::"/"path::" reference.
+  bitrise-version:
+    type: string
+    default: "latest"
+    description: Version of the Bitrise CLI to install, or "latest".
+  bin-dir:
+    type: string
+    default: "/tmp/bitrise-orb/bin"
+    description: Directory this orb's own tooling (the bitrise CLI, yq) is installed into.
+  cache-key-prefix:
+    type: string
+    default: "v1"
+    description: Prefix applied to every cache key this orb writes. Bump it to force a clean cache.
+  deploy-dir:
+    type: string
+    default: "/tmp/bitrise-orb/deploy"
+    description: >
+      Directory exported as $BITRISE_DEPLOY_DIR. Point store_artifacts/store_test_results
+      at this path in a later step to publish whatever the Step deposited there.
+  extra-env:
+    type: string
+    default: ""
+    description: >
+      Extra or override environment variables to export before the Step runs, as a flat
+      "NAME: value" YAML block (one pair per line, single-line values only). Applied
+      after this orb's built-in CircleCI -> Bitrise mapping, so entries here win.
+  skip-default-env-mapping:
+    type: boolean
+    default: false
+    description: Skip this orb's built-in CircleCI -> Bitrise environment variable mapping entirely.
+  config-path:
+    type: string
+    default: ".bitrise-orb.generated.yml"
+    description: Where the synthesized, throwaway bitrise.yml is written.
+  workflow-name:
+    type: string
+    default: "orb-step"
+    description: Name of the single workflow inside the synthesized bitrise.yml.
+  skip-install:
+    type: boolean
+    default: false
+    description: Skip installing the Bitrise CLI (e.g. an earlier orb step in this job already did).
+  skip-map-env:
+    type: boolean
+    default: false
+    description: Skip exporting the CircleCI -> Bitrise environment mapping (e.g. an earlier orb step in this job already did).
+  skip-collect-outputs:
+    type: boolean
+    default: false
+    description: Skip discovering and exporting the Step's declared outputs.
+
+steps:
+  - when:
+      condition: <<parameters.checkout>>
+      steps:
+        - checkout
+  - when:
+      condition:
+        not: <<parameters.skip-install>>
+      steps:
+        - install:
+            bitrise-version: <<parameters.bitrise-version>>
+            bin-dir: <<parameters.bin-dir>>
+            cache-key-prefix: <<parameters.cache-key-prefix>>
+  - create-config:
+      id: <<parameters.id>>
+      inputs: <<parameters.inputs>>
+      outputs: <<parameters.outputs>>
+      step-lib-source: <<parameters.step-lib-source>>
+      config-path: <<parameters.config-path>>
+      workflow-name: <<parameters.workflow-name>>
+  - when:
+      condition:
+        not: <<parameters.skip-map-env>>
+      steps:
+        - map-env:
+            deploy-dir: <<parameters.deploy-dir>>
+            extra-env: <<parameters.extra-env>>
+            skip-default-mapping: <<parameters.skip-default-env-mapping>>
+  - when:
+      condition:
+        not: <<parameters.skip-collect-outputs>>
+      steps:
+        - collect-outputs:
+            id: <<parameters.id>>
+            outputs: <<parameters.outputs>>
+            step-lib-source: <<parameters.step-lib-source>>
+            config-path: <<parameters.config-path>>
+            workflow-name: <<parameters.workflow-name>>
+  - run-bitrise:
+      config-path: <<parameters.config-path>>
+      workflow-name: <<parameters.workflow-name>>

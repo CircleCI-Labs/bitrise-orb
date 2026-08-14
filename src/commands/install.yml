@@ -1,0 +1,44 @@
+description: >
+  Install the Bitrise CLI, pinned to a specific version (or "latest") and cached across
+  jobs by that resolved version. `bitrise setup --ci --minimal` provisions envman/stepman
+  itself the first time it runs, so this command is idempotent -- rerunning it with the
+  same version and a warm cache is a fast no-op.
+
+parameters:
+  bitrise-version:
+    type: string
+    default: "latest"
+    description: Version of the Bitrise CLI to install (e.g. "2.42.2"), or "latest" to resolve the newest GitHub release at run time.
+  bin-dir:
+    type: string
+    default: "/tmp/bitrise-orb/bin"
+    description: Directory this orb's own tooling (the bitrise CLI, yq) is installed into and added to PATH.
+  cache-key-prefix:
+    type: string
+    default: "v1"
+    description: Prefix applied to every cache key this orb writes. Bump it to force a clean cache.
+
+steps:
+  - run:
+      name: "Resolving Bitrise CLI version"
+      environment:
+        ORB_VAL_BITRISE_VERSION: <<parameters.bitrise-version>>
+      command: <<include(scripts/resolve-bitrise-version.sh)>>
+  - restore_cache:
+      name: "Restoring cached Bitrise CLI + StepLib state"
+      keys:
+        - <<parameters.cache-key-prefix>>-bitrise-cache-cli-{{ arch }}-{{ checksum "/tmp/.bitrise-orb-version" }}
+        - <<parameters.cache-key-prefix>>-bitrise-cache-cli-{{ arch }}-
+  - run:
+      name: "Installing Bitrise CLI << parameters.bitrise-version >>"
+      environment:
+        ORB_VAL_BITRISE_VERSION: <<parameters.bitrise-version>>
+        ORB_VAL_BIN_DIR: <<parameters.bin-dir>>
+      command: <<include(scripts/install.sh)>>
+  - save_cache:
+      name: "Caching Bitrise CLI + StepLib state"
+      key: <<parameters.cache-key-prefix>>-bitrise-cache-cli-{{ arch }}-{{ checksum "/tmp/.bitrise-orb-version" }}
+      paths:
+        - <<parameters.bin-dir>>
+        - ~/.bitrise
+        - ~/.stepman

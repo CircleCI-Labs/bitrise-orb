@@ -1,0 +1,38 @@
+description: >
+  Discover the Step's declared output keys (via `stepman step-info`, reading the
+  activated Step's own step.yml -- no maintained list, no guessing) and append a Step to
+  the synthesized bitrise.yml that exports each one into $BASH_ENV under its verbatim
+  vendor name (or its alias, if "outputs" set one), immediately after the target Step.
+  Must run after create-config and before run-bitrise, against the same config-path.
+
+parameters:
+  id:
+    type: string
+    description: The same Step reference passed to create-config.
+  outputs:
+    type: string
+    default: ""
+    description: The same output-alias block passed to create-config.
+  step-lib-source:
+    type: string
+    default: "https://github.com/bitrise-io/bitrise-steplib.git"
+    description: The same step-lib-source passed to create-config.
+  config-path:
+    type: string
+    default: ".bitrise-orb.generated.yml"
+    description: The bitrise.yml create-config already wrote, to append the output collector Step to.
+  workflow-name:
+    type: string
+    default: "orb-step"
+    description: The workflow inside config-path to append the output collector Step to.
+
+steps:
+  - run:
+      name: "Discovering and wiring up << parameters.id >>'s outputs"
+      environment:
+        ORB_VAL_ID: <<parameters.id>>
+        ORB_VAL_OUTPUTS: <<parameters.outputs>>
+        ORB_VAL_STEP_LIB_SOURCE: <<parameters.step-lib-source>>
+        ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
+        ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>
+      command: <<include(scripts/collect-outputs.sh)>>

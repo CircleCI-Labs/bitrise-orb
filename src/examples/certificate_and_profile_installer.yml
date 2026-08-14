@@ -1,0 +1,24 @@
+description: >
+  Install an iOS code-signing certificate and provisioning profile before a native Xcode
+  build step, using Bitrise's "certificate-and-profile-installer" Step -- the simplest
+  real Step in the StepLib, a good first Step to try this orb with. certificate_url/
+  provisioning_profile_url accept plain https:// or file:// URLs (this Step has no
+  Bitrise-hosted dependency at all), so point them at wherever your org already stores
+  these files and pass the values in through a restricted CircleCI context.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  workflows:
+    ios-code-signing:
+      jobs:
+        - bitrise/step:
+            name: Install iOS Certificate And Profile
+            executor: bitrise/macos
+            context: ios-signing
+            id: certificate-and-profile-installer@1
+            inputs: |
+              certificate_url: $IOS_CERTIFICATE_URL
+              certificate_passphrase: $IOS_CERTIFICATE_PASSPHRASE
+              provisioning_profile_url: $IOS_PROVISIONING_PROFILE_URL

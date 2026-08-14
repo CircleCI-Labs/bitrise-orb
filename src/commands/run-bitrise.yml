@@ -1,0 +1,22 @@
+description: >
+  Run the synthesized bitrise.yml. Thin on purpose (Locked Decision #5): no retries, no
+  swallowed exit codes, no re-validation of the Step's own inputs -- if the Step fails,
+  this step fails, with the Step's own stderr already on the console unmodified.
+
+parameters:
+  config-path:
+    type: string
+    default: ".bitrise-orb.generated.yml"
+    description: The bitrise.yml to run.
+  workflow-name:
+    type: string
+    default: "orb-step"
+    description: The workflow inside config-path to run.
+
+steps:
+  - run:
+      name: "Running Bitrise Step"
+      environment:
+        ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
+        ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>
+      command: <<include(scripts/run-bitrise.sh)>>

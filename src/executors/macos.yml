@@ -1,0 +1,30 @@
+description: >
+  A macOS executor for a Bitrise Step that needs Xcode -- code signing, archiving,
+  simulator/device builds. There is no default `bitrise/executor` for this orb (see the
+  bitrise/machine executor and this repo's README): a Bitrise Step declares nothing
+  machine-readable about needing macOS at all, so this orb never guesses which OS to run
+  on. The "xcode" parameter below does have a default, since guessing an Xcode *version*
+  wrong on an already-correctly-chosen macOS executor only risks a build error, not the
+  ~10x-cost executor mismatch that motivates leaving the OS choice itself unset.
+
+parameters:
+  xcode:
+    type: string
+    default: "15.4.0"
+    description: >
+      Xcode version tag for CircleCI's macOS executor. Check CircleCI's currently
+      supported versions (https://circleci.com/docs/using-macos/) before relying on the
+      default long-term -- it is a reasonable, stable starting point, not a floating
+      "latest" alias (macOS Xcode image tags are pinned versions, unlike the machine
+      executor's "current" convenience tag).
+  resource-class:
+    type: string
+    default: "macos.m1.medium.gen1"
+    description: >
+      CircleCI macOS resource class. Resource class names/availability vary by plan and
+      change over time -- this default is a reasonable starting point, not guaranteed
+      current; check `circleci config validate` or CircleCI's docs if it's rejected.
+
+macos:
+  xcode: <<parameters.xcode>>
+resource_class: <<parameters.resource-class>>
