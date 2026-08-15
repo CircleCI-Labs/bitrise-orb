@@ -314,16 +314,17 @@ Because that last row's checksums are pinned to one exact version each, `node-ve
 
 **Caching, and what's honestly NOT cached:** `init-stack` caches everything it downloads directly (the Android SDK root, the fastlane gem's `GEM_HOME`, the Node.js install, and any `tools` catalog binaries), keyed on the exact resolved profile+tools+versions -- a warm run's install step is a handful of directory-existence checks, no network calls. What it can't cache: **apt package installs themselves** (JDK, Ruby, `zstd`) -- `bitrise/machine` is a fresh VM every job, so `apt-get install` pays its own real cost (a network round-trip plus package unpack) on every single run regardless of this orb's own cache state. That's an inherent property of the machine executor, not something `init-stack` failed to solve -- see the measured timings below for exactly what that costs in practice.
 
-**Measured timings** (`bitrise/machine`, `medium` resource class, pipeline runs on this repo's own CI):
+**Measured timings** (`bitrise/machine`, `medium` resource class, the `Installing stack toolchain` step's own duration, from this repo's own real CI runs -- pipelines #21/#22 for cold, #25 for warm):
 
 | Profile | Cold (empty cache) | Warm (cache hit) |
 |---|---|---|
-| `none` (zstd only) | ~X s | ~X s |
-| `android-build` | ~X s | ~X s |
-| `fastlane` | ~X s | ~X s |
-| `js-mobile` | ~X s | ~X s |
+| `none` (zstd only) | 0.49s | 0.46s |
+| `android-build` | 12.3s | 0.57s |
+| `fastlane` | 40.8s | **16.4s** |
+| `js-mobile` | 2.9s | 0.37s |
+| `tools: "ripgrep,gh"` | 1.1s | 0.33s |
 
-*(Filled in from this repo's own pipeline job durations after the first real run -- see the job list linked from this repo's CircleCI Build Status badge above for the current numbers if these look stale.)*
+**`fastlane`'s warm number is not a bug** -- it's the "what's honestly NOT cached" caveat above, measured: `apt-get install ruby-full build-essential` re-runs in full on every job regardless of cache state (this specific machine image doesn't carry `ruby-full`/`build-essential` preinstalled, unlike `openjdk-17-jdk-headless`, which this image *does* already carry -- which is also exactly why `android-build`'s apt step is nearly free here specifically; a different/custom base image is not guaranteed to have either preinstalled). Only the Android SDK/gem-install/Node-install portions of each profile are actually being measured going from 12.3s/2.9s to sub-second above -- the apt-package portions are inherent, per-job cost on the machine executor, not something this command failed to cache.
 
 `init-stack`'s own resolve -> restore_cache -> install -> save_cache shape deliberately mirrors `install.yml`'s (the Bitrise CLI's own install command) -- that command was already the reference pattern for "resolve first, checksum the resolved value, cache by that checksum" before this one existed; `init-stack` doesn't share code with it (each `<<include(...)>>`'d script is packed as an independent, self-contained command body -- see `resolve-stack-plan.sh`'s own comment), but it follows the same shape on purpose.
 
