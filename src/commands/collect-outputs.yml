@@ -35,6 +35,14 @@ parameters:
     type: string
     default: "orb-step"
     description: The workflow inside config-path to append the output collector Step to.
+  debug-dump-config:
+    type: boolean
+    default: false
+    description: >
+      Print the fully-resolved synthesized bitrise.yml to the job console after
+      appending the output collector Step. OFF BY DEFAULT (security review, Finding
+      #3) -- same reasoning as create-config's identical parameter. Enable only for
+      local debugging of this orb itself.
 
 steps:
   - run:
@@ -46,4 +54,5 @@ steps:
         ORB_VAL_STEP_LIB_SOURCE: <<parameters.step-lib-source>>
         ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
         ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>
+        ORB_VAL_DEBUG_DUMP_CONFIG: <<parameters.debug-dump-config>>
       command: <<include(scripts/collect-outputs.sh)>>

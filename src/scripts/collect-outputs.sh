@@ -34,6 +34,33 @@ fi
 
 IDENTIFIER_RE='^[A-Za-z_][A-Za-z0-9_]*$'
 
+# SECURITY (security review, Finding #2 -- CRITICAL): this used to validate a declared
+# output KEY/ALIAS only against IDENTIFIER_RE above, which accepts PATH, BASH_ENV, IFS,
+# LD_PRELOAD, GIT_SSH_COMMAND, etc. just as happily as any ordinary output name -- none
+# of those are rejected by "is it a legal identifier". Because this orb's entire point
+# is running someone else's Step code, a Step (or a malicious/compromised one reached via
+# the "git::"/"path::" reference grammar) can declare `outputs: - PATH: {}` in its own
+# step.yml, call `envman add --key PATH --value "/tmp/evil:$PATH"`, and this script would
+# previously have exported that straight into $BASH_ENV -- poisoning PATH (or BASH_ENV,
+# IFS, LD_PRELOAD, ...) for every LATER step in the job, not just this one. Also directly
+# reachable via the user-facing "extra-outputs" parameter. Refuse any declared/extra
+# output key, or output alias, that names one of these reserved shell variables -- this
+# is this orb's own canonical copy of the same denylist class its sibling bridge orbs
+# (harness/bitbucket/buildkite) already carry in their own collect-outputs/map-env
+# scripts for the identical reason.
+RESERVED_SHELL_VAR_NAMES=(
+  PATH BASH_ENV IFS ENV SHELLOPTS PS4 LD_PRELOAD LD_LIBRARY_PATH HOME TMPDIR SHELL
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH NODE_OPTIONS GIT_SSH_COMMAND PERL5LIB
+  PYTHONPATH RUBYOPT CDPATH
+)
+is_reserved_shell_var() {
+  local name="$1" reserved
+  for reserved in "${RESERVED_SHELL_VAR_NAMES[@]}"; do
+    [[ "${name}" == "${reserved}" ]] && return 0
+  done
+  return 1
+}
+
 # --- Parse ORB_VAL_ID into stepman's own (--library, --id, --version) calling
 # convention. Mirrors the reference grammar in this project's spike report (bitrise.md,
 # section 5/6): "<step_lib_source>::<step-id>@<version>", plus the special "git::" and
@@ -120,6 +147,10 @@ while IFS= read -r name; do
   [[ -z "${name}" ]] && continue
   if [[ ! "${name}" =~ ${IDENTIFIER_RE} ]]; then
     echo "bitrise-orb: invalid 'extra-outputs' entry '${name}' -- must be a plain environment variable name matching [A-Za-z_][A-Za-z0-9_]*." >&2
+    exit 1
+  fi
+  if is_reserved_shell_var "${name}"; then
+    echo "bitrise-orb: refusing 'extra-outputs' entry '${name}' -- it names a reserved shell variable this orb will not let a Step's output overwrite (PATH, BASH_ENV, IFS, LD_PRELOAD, and similar -- see the RESERVED_SHELL_VAR_NAMES comment above)." >&2
     exit 1
   fi
   EXTRA_KEYS+=("${name}")
@@ -231,10 +262,18 @@ for KEY in "${OUTPUT_KEYS[@]}"; do
     echo "bitrise-orb: refusing to export output key '${KEY}' -- not a valid environment variable name matching [A-Za-z_][A-Za-z0-9_]*." >&2
     exit 1
   fi
+  if is_reserved_shell_var "${KEY}"; then
+    echo "bitrise-orb: refusing to export output key '${KEY}' -- it names a reserved shell variable (PATH, BASH_ENV, IFS, LD_PRELOAD, and similar). A Step that declares (or is told, via extra-outputs, to export) one of these could otherwise poison every LATER step in this job, not just its own -- see the RESERVED_SHELL_VAR_NAMES comment above." >&2
+    exit 1
+  fi
   ALIAS="$(echo "${ALIASES_JSON}" | jq -r --arg k "${KEY}" '.[$k] // empty')"
   if [[ -n "${ALIAS}" ]]; then
     if [[ ! "${ALIAS}" =~ ${IDENTIFIER_RE} ]]; then
       echo "bitrise-orb: refusing to use output alias '${ALIAS}' for '${KEY}' -- not a valid environment variable name matching [A-Za-z_][A-Za-z0-9_]*." >&2
+      exit 1
+    fi
+    if is_reserved_shell_var "${ALIAS}"; then
+      echo "bitrise-orb: refusing to use output alias '${ALIAS}' for '${KEY}' -- it names a reserved shell variable this orb will not let a Step's output overwrite (PATH, BASH_ENV, IFS, LD_PRELOAD, and similar)." >&2
       exit 1
     fi
     # Prefer the alias, but only if it actually holds a non-empty value -- fall back to
@@ -255,5 +294,19 @@ COLLECTOR_SCRIPT+='echo "bitrise-orb: exported Step outputs to \$BASH_ENV"'
 COLLECTOR_SCRIPT="${COLLECTOR_SCRIPT}" ORB_VAL_WORKFLOW_NAME="${ORB_VAL_WORKFLOW_NAME}" \
   yq eval -i '.workflows[strenv(ORB_VAL_WORKFLOW_NAME)].steps += [{"script@1": {"title": "bitrise-orb: export Step outputs to BASH_ENV", "inputs": [{"content": strenv(COLLECTOR_SCRIPT)}]}}]' "${ORB_VAL_CONFIG_PATH}"
 
-echo "Appended output collector Step. Final bitrise.yml at ${ORB_VAL_CONFIG_PATH}:"
-cat "${ORB_VAL_CONFIG_PATH}"
+echo "Appended output collector Step to ${ORB_VAL_CONFIG_PATH}."
+
+# SECURITY (security review, Finding #3 -- HIGH): same reasoning as create-config.sh's
+# identical fix -- this used to unconditionally `cat` the file here too, a second
+# unconditional leak of the same already-resolved secrets on every run. Gated behind the
+# same opt-in debug parameter.
+orb_bool_is_true() {
+  case "${1:-}" in
+    1 | true | True | TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if orb_bool_is_true "${ORB_VAL_DEBUG_DUMP_CONFIG:-}"; then
+  echo "debug-dump-config is true -- printing the fully-resolved file (may contain resolved secrets):"
+  cat "${ORB_VAL_CONFIG_PATH}"
+fi

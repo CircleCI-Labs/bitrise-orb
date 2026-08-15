@@ -32,6 +32,26 @@ orb_bool_is_true() {
   esac
 }
 
+# SECURITY (security review, Finding #10 -- LOW, consistency): "extra-env" used to be
+# checked only against the identifier regex below, unlike collect-outputs.sh's
+# equivalent check (see that script's RESERVED_SHELL_VAR_NAMES, added for Finding #2).
+# Author-controlled input makes this lower-risk than #2's Step-output path, but there's
+# no reason "extra-env: PATH: /tmp/evil:$PATH" should silently be allowed to poison every
+# later step in the job just because this specific parameter forgot the same guard its
+# sibling already has. Same canonical list, same reasoning.
+RESERVED_SHELL_VAR_NAMES=(
+  PATH BASH_ENV IFS ENV SHELLOPTS PS4 LD_PRELOAD LD_LIBRARY_PATH HOME TMPDIR SHELL
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH NODE_OPTIONS GIT_SSH_COMMAND PERL5LIB
+  PYTHONPATH RUBYOPT CDPATH
+)
+is_reserved_shell_var() {
+  local name="$1" reserved
+  for reserved in "${RESERVED_SHELL_VAR_NAMES[@]}"; do
+    [[ "${name}" == "${reserved}" ]] && return 0
+  done
+  return 1
+}
+
 mkdir -p "${ORB_VAL_DEPLOY_DIR}"
 echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >> "$BASH_ENV"
 
@@ -84,6 +104,10 @@ if [[ -n "${ORB_VAL_EXTRA_ENV// /}" ]]; then
     [[ -z "${key}" ]] && continue
     if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
       echo "bitrise-orb: invalid extra-env variable name '${key}' -- must match [A-Za-z_][A-Za-z0-9_]*." >&2
+      exit 1
+    fi
+    if is_reserved_shell_var "${key}"; then
+      echo "bitrise-orb: refusing extra-env entry '${key}' -- it names a reserved shell variable this orb will not let extra-env override (PATH, BASH_ENV, IFS, LD_PRELOAD, and similar -- see the RESERVED_SHELL_VAR_NAMES comment above)." >&2
       exit 1
     fi
     value="$(circleci env subst "${raw_value}")"

@@ -69,6 +69,13 @@ parameters:
     type: string
     default: "v1"
     description: Prefix applied to every cache key this orb writes. Bump it to force a clean cache.
+  verify-checksums:
+    type: boolean
+    default: true
+    description: >
+      When true (default), the Bitrise CLI and yq downloads (via `install`) are
+      checksum-verified before use; a mismatch fails the step. Never disable outside
+      local debugging of this orb itself.
   deploy-dir:
     type: string
     default: "/tmp/bitrise-orb/deploy"
@@ -132,6 +139,17 @@ parameters:
     type: boolean
     default: false
     description: Skip discovering and exporting the Step's declared outputs.
+  debug-dump-config:
+    type: boolean
+    default: false
+    description: >
+      Print the fully-resolved synthesized bitrise.yml to the job console after
+      create-config and again after collect-outputs. OFF BY DEFAULT (security review,
+      Finding #3): by the time either dump would happen, every "$SECRET"-style reference
+      in your inputs/outputs has already been resolved to its real value via `circleci
+      env subst` -- printing it relies entirely on that value being an exact-match,
+      CircleCI-registered secret for log masking to catch it. Enable only for local
+      debugging of this orb itself, never left on in a real pipeline.
 
 steps:
   - when:
@@ -146,6 +164,7 @@ steps:
             bitrise-version: <<parameters.bitrise-version>>
             bin-dir: <<parameters.bin-dir>>
             cache-key-prefix: <<parameters.cache-key-prefix>>
+            verify-checksums: <<parameters.verify-checksums>>
   # map-env MUST run before create-config, not after. create-config resolves
   # "$MY_SECRET"-style references inside the user's "inputs"/"outputs" blocks via
   # `circleci env subst` (Locked Decision #8) at the time it authors the synthesized
@@ -179,6 +198,7 @@ steps:
       step-lib-source: <<parameters.step-lib-source>>
       config-path: <<parameters.config-path>>
       workflow-name: <<parameters.workflow-name>>
+      debug-dump-config: <<parameters.debug-dump-config>>
   - when:
       condition:
         not: <<parameters.skip-collect-outputs>>
@@ -190,6 +210,7 @@ steps:
             step-lib-source: <<parameters.step-lib-source>>
             config-path: <<parameters.config-path>>
             workflow-name: <<parameters.workflow-name>>
+            debug-dump-config: <<parameters.debug-dump-config>>
   - run-bitrise:
       config-path: <<parameters.config-path>>
       workflow-name: <<parameters.workflow-name>>

@@ -67,6 +67,13 @@ parameters:
     type: string
     default: "v1"
     description: Prefix applied to every cache key this orb writes. Bump it to force a clean cache.
+  verify-checksums:
+    type: boolean
+    default: true
+    description: >
+      When true (default), the Bitrise CLI and yq downloads (via `install`) are
+      checksum-verified before use; a mismatch fails the step. Never disable outside
+      local debugging of this orb itself.
   deploy-dir:
     type: string
     default: "/tmp/bitrise-orb/deploy"
@@ -125,6 +132,14 @@ parameters:
     type: boolean
     default: false
     description: Skip discovering and exporting the Step's declared outputs.
+  debug-dump-config:
+    type: boolean
+    default: false
+    description: >
+      Print the fully-resolved synthesized bitrise.yml to the job console (security
+      review, Finding #3 -- may contain resolved secrets; see the `step` command's
+      identical parameter). Off by default; enable only for local debugging of this orb
+      itself.
 
 executor: <<parameters.executor>>
 
@@ -143,6 +158,7 @@ steps:
       bitrise-version: <<parameters.bitrise-version>>
       bin-dir: <<parameters.bin-dir>>
       cache-key-prefix: <<parameters.cache-key-prefix>>
+      verify-checksums: <<parameters.verify-checksums>>
       deploy-dir: <<parameters.deploy-dir>>
       store-artifacts: <<parameters.store-artifacts>>
       test-results-dir: <<parameters.test-results-dir>>
@@ -154,3 +170,4 @@ steps:
       skip-install: <<parameters.skip-install>>
       skip-map-env: <<parameters.skip-map-env>>
       skip-collect-outputs: <<parameters.skip-collect-outputs>>
+      debug-dump-config: <<parameters.debug-dump-config>>

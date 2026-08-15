@@ -17,6 +17,14 @@ parameters:
     type: string
     default: "v1"
     description: Prefix applied to every cache key this orb writes. Bump it to force a clean cache.
+  verify-checksums:
+    type: boolean
+    default: true
+    description: >
+      When true (default), the Bitrise CLI download is verified against its own
+      GitHub release's published checksums.txt, and the yq download is verified against
+      this orb's vendored checksum table, before either is executed. A mismatch fails
+      the step. Never disable outside local debugging of this orb itself.
 
 steps:
   - run:
@@ -34,6 +42,7 @@ steps:
       environment:
         ORB_VAL_BITRISE_VERSION: <<parameters.bitrise-version>>
         ORB_VAL_BIN_DIR: <<parameters.bin-dir>>
+        ORB_VAL_VERIFY_CHECKSUMS: <<parameters.verify-checksums>>
       command: <<include(scripts/install.sh)>>
   - save_cache:
       name: "Caching Bitrise CLI + StepLib state"

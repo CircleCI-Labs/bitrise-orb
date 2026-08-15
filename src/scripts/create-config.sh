@@ -132,5 +132,22 @@ STEP_LIB_SOURCE="${ORB_VAL_STEP_LIB_SOURCE}" WORKFLOW_NAME="${ORB_VAL_WORKFLOW_N
     }
   }' > "${ORB_VAL_CONFIG_PATH}"
 
-echo "Synthesized bitrise.yml at ${ORB_VAL_CONFIG_PATH}:"
-cat "${ORB_VAL_CONFIG_PATH}"
+echo "Synthesized bitrise.yml at ${ORB_VAL_CONFIG_PATH}."
+
+# SECURITY (security review, Finding #3 -- HIGH): this used to unconditionally `cat` the
+# synthesized file, which by this point contains every "$SECRET"-style inputs/outputs
+# reference already resolved to its real value via `circleci env subst` above --
+# printing it relies entirely on that value being an exact-match, CircleCI-registered
+# secret for log masking to catch it; anything else (an API key embedded in a larger
+# string, a derived value) leaked in full, on every run. Gated behind an explicit
+# opt-in debug parameter instead, per the review's own suggested fix.
+orb_bool_is_true() {
+  case "${1:-}" in
+    1 | true | True | TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if orb_bool_is_true "${ORB_VAL_DEBUG_DUMP_CONFIG:-}"; then
+  echo "debug-dump-config is true -- printing the fully-resolved file (may contain resolved secrets):"
+  cat "${ORB_VAL_CONFIG_PATH}"
+fi

@@ -44,6 +44,16 @@ parameters:
     type: string
     default: "orb-step"
     description: Name of the single workflow inside the synthesized bitrise.yml.
+  debug-dump-config:
+    type: boolean
+    default: false
+    description: >
+      Print the fully-resolved synthesized bitrise.yml to the job console. OFF BY
+      DEFAULT (security review, Finding #3): every "$SECRET"-style reference in
+      inputs/outputs has already been resolved to its real value by the time this would
+      print, so printing it relies entirely on that value being an exact-match,
+      CircleCI-registered secret for log masking to catch it. Enable only for local
+      debugging of this orb itself.
 
 steps:
   - run:
@@ -55,4 +65,5 @@ steps:
         ORB_VAL_STEP_LIB_SOURCE: <<parameters.step-lib-source>>
         ORB_VAL_CONFIG_PATH: <<parameters.config-path>>
         ORB_VAL_WORKFLOW_NAME: <<parameters.workflow-name>>
+        ORB_VAL_DEBUG_DUMP_CONFIG: <<parameters.debug-dump-config>>
       command: <<include(scripts/create-config.sh)>>

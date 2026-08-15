@@ -8,6 +8,46 @@ set -euo pipefail
 # bash/shellcheck, and breaks on multi-line or special-character values):
 #   ORB_VAL_BITRISE_VERSION  -- "latest" or a concrete version, e.g. "2.42.2"
 #   ORB_VAL_BIN_DIR          -- directory this orb's own tooling (bitrise CLI, yq) lives in
+#   ORB_VAL_VERIFY_CHECKSUMS -- boolean-as-string (see map-env.sh's orb_bool_is_true note);
+#                               never disable outside local debugging of this orb itself
+#
+# SECURITY (security review, Finding #8 -- MEDIUM): both binaries this script downloads
+# used to be curl'd straight into place with NO checksum or signature verification --
+# the only runtime binary downloads in this orb family with that gap. Fixed here, with a
+# different integrity mechanism per binary because their release cadence differs:
+#   - the Bitrise CLI can float to "latest", so there's no one checksum to vendor ahead
+#     of time -- instead, fetch the SAME GitHub release's own published "checksums.txt"
+#     (over HTTPS, from the exact resolved tag) and verify the download against THAT,
+#     same-origin, before it's ever chmod +x'd or executed.
+#   - yq is pinned to one fixed version already (YQ_VERSION below), so its four
+#     (os, arch) checksums are vendored directly, computed from and cross-checked
+#     against yq's own multi-algorithm "checksums" release artifact.
+# Neither path is "curl | bash" -- both fully download to disk, verify, THEN execute.
+
+orb_bool_is_true() {
+  case "${1:-}" in
+    1 | true | True | TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+verify_sha256() {
+  # $1 = file, $2 = expected sha256, $3 = human label for messages
+  local file="$1" expected="$2" label="$3" actual
+  if ! orb_bool_is_true "${ORB_VAL_VERIFY_CHECKSUMS:-1}"; then
+    echo "WARNING: verify-checksums is false -- skipping checksum verification for ${label}. Never disable this outside local debugging of this orb itself." >&2
+    return 0
+  fi
+  actual="$(sha256sum "${file}" | awk '{print $1}')"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "bitrise-orb: checksum mismatch for ${label} -- refusing to use this download." >&2
+    echo "  expected: ${expected}" >&2
+    echo "  got:      ${actual}" >&2
+    rm -f "${file}"
+    exit 1
+  fi
+  echo "Checksum OK for ${label}."
+}
 
 mkdir -p "${ORB_VAL_BIN_DIR}"
 
@@ -63,11 +103,35 @@ bitrise_installed_version() {
 if [[ -x "${ORB_VAL_BIN_DIR}/bitrise" ]] && [[ "$(bitrise_installed_version)" == "${BITRISE_VERSION_TAG#v}" ]]; then
   echo "bitrise CLI ${BITRISE_VERSION_TAG} already present at ${ORB_VAL_BIN_DIR}/bitrise (cache hit) -- skipping download."
 else
-  BITRISE_URL="https://github.com/bitrise-io/bitrise/releases/download/${BITRISE_VERSION_TAG}/bitrise-${OS}-${ARCH}"
+  BITRISE_ASSET="bitrise-${OS}-${ARCH}"
+  BITRISE_URL="https://github.com/bitrise-io/bitrise/releases/download/${BITRISE_VERSION_TAG}/${BITRISE_ASSET}"
   echo "Downloading Bitrise CLI ${BITRISE_VERSION_TAG} for ${OS}/${ARCH}:"
   echo "  ${BITRISE_URL}"
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
     --output "${ORB_VAL_BIN_DIR}/bitrise" "${BITRISE_URL}"
+
+  if orb_bool_is_true "${ORB_VAL_VERIFY_CHECKSUMS:-1}"; then
+    # Same-origin verification against the EXACT resolved release's own published
+    # checksums.txt (bitrise-io/bitrise publishes one per release) -- this covers
+    # "latest" too, since it verifies against whatever tag was actually resolved above,
+    # not a checksum vendored ahead of time for a version we can't predict.
+    BITRISE_CHECKSUMS_URL="https://github.com/bitrise-io/bitrise/releases/download/${BITRISE_VERSION_TAG}/checksums.txt"
+    BITRISE_CHECKSUMS_FILE="$(mktemp)"
+    echo "Fetching ${BITRISE_VERSION_TAG}'s own checksums.txt to verify the download against:"
+    echo "  ${BITRISE_CHECKSUMS_URL}"
+    curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+      --output "${BITRISE_CHECKSUMS_FILE}" "${BITRISE_CHECKSUMS_URL}"
+    BITRISE_EXPECTED_SHA256="$(grep -E "  ${BITRISE_ASSET}\$" "${BITRISE_CHECKSUMS_FILE}" | awk '{print $1}' | head -1)"
+    rm -f "${BITRISE_CHECKSUMS_FILE}"
+    if [[ -z "${BITRISE_EXPECTED_SHA256}" ]]; then
+      echo "bitrise-orb: could not find an entry for '${BITRISE_ASSET}' in ${BITRISE_VERSION_TAG}'s checksums.txt -- refusing to use an unverified download." >&2
+      rm -f "${ORB_VAL_BIN_DIR}/bitrise"
+      exit 1
+    fi
+    verify_sha256 "${ORB_VAL_BIN_DIR}/bitrise" "${BITRISE_EXPECTED_SHA256}" "Bitrise CLI ${BITRISE_VERSION_TAG} (${BITRISE_ASSET})"
+  else
+    echo "WARNING: verify-checksums is false -- skipping checksum verification for the Bitrise CLI download. Never disable this outside local debugging of this orb itself." >&2
+  fi
   chmod +x "${ORB_VAL_BIN_DIR}/bitrise"
 fi
 
@@ -86,15 +150,42 @@ fi
 # publishes assets under this yq_<os>_<arch> naming, before the first real release of
 # this orb.
 YQ_VERSION="v4.44.3"
+
+# Vendored sha256 checksums for yq's own (os, arch) binaries at the exact pinned
+# YQ_VERSION above -- computed directly from the downloaded binaries and cross-checked
+# against yq's own published multi-algorithm "checksums" release artifact (its SHA-256
+# column, per its sibling "checksums_hashes_order" file) while authoring this fix.
+# Because YQ_VERSION is a fixed pin (not "latest"), these can be vendored ahead of time
+# rather than fetched per run -- update this table (and re-verify) whenever YQ_VERSION
+# is bumped.
+yq_expected_sha256() {
+  case "$1" in
+    linux_amd64) echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7" ;;
+    linux_arm64) echo "0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156" ;;
+    darwin_amd64) echo "216ddfa03e7ba0e5aba00b236ec78324b5bfc49b610db254fe92310878baea20" ;;
+    darwin_arm64) echo "559a594ef7a6ebc5b81a67b7717fb3accedd266d8fa7d8352da7fec9e463f48b" ;;
+    *) echo "" ;;
+  esac
+}
+
 if [[ -x "${ORB_VAL_BIN_DIR}/yq" ]] && [[ "$("${ORB_VAL_BIN_DIR}/yq" --version 2> /dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" == "${YQ_VERSION#v}" ]]; then
   echo "yq ${YQ_VERSION} already present at ${ORB_VAL_BIN_DIR}/yq (cache hit) -- skipping download."
 else
   YQ_OS="$(echo "${OS}" | tr '[:upper:]' '[:lower:]')"
-  YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${YQ_OS}_${YQ_ARCH}"
+  YQ_ASSET="yq_${YQ_OS}_${YQ_ARCH}"
+  YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_ASSET}"
   echo "Downloading yq ${YQ_VERSION} for ${YQ_OS}/${YQ_ARCH}:"
   echo "  ${YQ_URL}"
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
     --output "${ORB_VAL_BIN_DIR}/yq" "${YQ_URL}"
+
+  YQ_EXPECTED_SHA256="$(yq_expected_sha256 "${YQ_ASSET}")"
+  if [[ -z "${YQ_EXPECTED_SHA256}" ]]; then
+    echo "bitrise-orb: no vendored checksum for '${YQ_ASSET}' at ${YQ_VERSION} -- refusing to use an unverified download." >&2
+    rm -f "${ORB_VAL_BIN_DIR}/yq"
+    exit 1
+  fi
+  verify_sha256 "${ORB_VAL_BIN_DIR}/yq" "${YQ_EXPECTED_SHA256}" "yq ${YQ_VERSION} (${YQ_ASSET})"
   chmod +x "${ORB_VAL_BIN_DIR}/yq"
 fi
 
