@@ -1,8 +1,10 @@
 description: >
   Run exactly one Bitrise Step inside this job, using the Bitrise CLI locally -- no
-  bitrise.io account or token. Composes this orb's install / create-config / map-env /
+  bitrise.io account or token. Composes this orb's install / map-env / create-config /
   collect-outputs / run-bitrise commands in the one order that makes the whole thing work
-  end to end, then owns its own lifecycle by default: a `store_artifacts` step against
+  end to end (map-env deliberately runs BEFORE create-config -- see the note above the
+  `create-config` step below), then owns its own lifecycle by default: a
+  `store_artifacts` step against
   deploy-dir and a `store_test_results` step against test-results-dir, each independently
   disable-able. Each stage can be individually skipped so a future multi-Step orb call can
   reuse an already-installed CLI or an already-applied env mapping within the same job
@@ -144,13 +146,23 @@ steps:
             bitrise-version: <<parameters.bitrise-version>>
             bin-dir: <<parameters.bin-dir>>
             cache-key-prefix: <<parameters.cache-key-prefix>>
-  - create-config:
-      id: <<parameters.id>>
-      inputs: <<parameters.inputs>>
-      outputs: <<parameters.outputs>>
-      step-lib-source: <<parameters.step-lib-source>>
-      config-path: <<parameters.config-path>>
-      workflow-name: <<parameters.workflow-name>>
+  # map-env MUST run before create-config, not after. create-config resolves
+  # "$MY_SECRET"-style references inside the user's "inputs"/"outputs" blocks via
+  # `circleci env subst` (Locked Decision #8) at the time it authors the synthesized
+  # bitrise.yml -- a plain shell-style substitution against whatever is in the process
+  # environment AT THAT MOMENT, not a deferred/runtime lookup inside Bitrise. map-env is
+  # what actually exports $BITRISE_DEPLOY_DIR, $BITRISE_TEST_DEPLOY_DIR,
+  # $BITRISE_SOURCE_DIR, $BITRISE_GIT_COMMIT, etc. into $BASH_ENV. Running create-config
+  # first (the original order) meant any Step input referencing one of THIS ORB'S OWN
+  # exported variables -- e.g. `output_path: $BITRISE_DEPLOY_DIR/app.ipa` -- silently
+  # resolved to an empty string, because that variable didn't exist yet when
+  # create-config ran. Reproduced against real CI (bitrise-orb pipeline 8, job 58:
+  # `echo "marker" > "$BITRISE_DEPLOY_DIR/marker.txt"` synthesized as
+  # `echo "marker" > "/marker.txt"`, which then failed with "Permission denied" writing
+  # to the container's filesystem root). map-env has no dependency on create-config's
+  # output -- it only needs deploy-dir/test-results-dir/extra-env/skip-default-mapping --
+  # so swapping the order is safe and fixes this for every orb consumer, not just this
+  # orb's own tests.
   - when:
       condition:
         not: <<parameters.skip-map-env>>
@@ -160,6 +172,13 @@ steps:
             test-results-dir: <<parameters.test-results-dir>>
             extra-env: <<parameters.extra-env>>
             skip-default-mapping: <<parameters.skip-default-env-mapping>>
+  - create-config:
+      id: <<parameters.id>>
+      inputs: <<parameters.inputs>>
+      outputs: <<parameters.outputs>>
+      step-lib-source: <<parameters.step-lib-source>>
+      config-path: <<parameters.config-path>>
+      workflow-name: <<parameters.workflow-name>>
   - when:
       condition:
         not: <<parameters.skip-collect-outputs>>

@@ -19,11 +19,17 @@ parameters:
       executor's "current" convenience tag).
   resource-class:
     type: string
-    default: "macos.m1.medium.gen1"
+    default: "m4pro.medium"
     description: >
       CircleCI macOS resource class. Resource class names/availability vary by plan and
       change over time -- this default is a reasonable starting point, not guaranteed
-      current; check `circleci config validate` or CircleCI's docs if it's rejected.
+      current; check `circleci config validate` or CircleCI's docs if it's rejected. Was
+      previously "macos.m1.medium.gen1", the M1-generation naming; that class was
+      rejected outright on gh/CircleCI-Labs' real pipeline ("Job was rejected because
+      resource class macos.m1.medium.gen1, image xcode:15.4.0 is not a valid resource
+      class" -- bitrise-orb pipeline 10, job 54), consistent with CircleCI's published
+      M1/M2 resource class end-of-life. "m4pro.medium" is CircleCI's current Apple
+      Silicon class as of this writing and supports the "xcode" default above.
 
 macos:
   xcode: <<parameters.xcode>>
