@@ -28,6 +28,7 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 - Step inputs are a flat YAML block resolved through CircleCI's built-in `circleci env subst`, so `$MY_SECRET` resolves at run time and secrets never have to enter your committed config.
 - **No failure wrapping.** If a Step errors because a required input or credential is missing, the job fails with that Step's own stderr on the console, unmodified -- no retries, no swallowed exit codes, no extra validation layer guessing at what the Step needs.
 - Two named executors (`bitrise/macos`, `bitrise/machine`) with **no default** -- see "Choosing an executor" below for why.
+- **Smart defaults: this orb owns its own lifecycle.** `store_artifacts` against `deploy-dir` and `store_test_results` against `test-results-dir` both run automatically, with zero config -- see "The environment variable mapping" below. Each is a boolean you can turn off if you'd rather do it yourself.
 
 ## Resources
 
@@ -79,8 +80,8 @@ jobs:
       - run:
           name: Use the .ipa Bitrise just built
           command: echo "xcode-archive produced $BITRISE_IPA_PATH"
-      - store_artifacts:
-          path: /tmp/bitrise-orb/deploy
+      # No manual store_artifacts needed here -- store-artifacts defaults to true, so
+      # bitrise/step already published /tmp/bitrise-orb/deploy for you.
 workflows:
   ios-release:
     jobs:
@@ -106,9 +107,6 @@ workflows:
             keystore_password: $ANDROID_KEYSTORE_PASSWORD
             keystore_alias: $ANDROID_KEYSTORE_ALIAS
             private_key_password: $ANDROID_KEY_PASSWORD
-          after-steps:
-            - store_artifacts:
-                path: /tmp/bitrise-orb/deploy
           context: android-signing
 ```
 
@@ -127,6 +125,8 @@ jobs:
       - checkout
       - bitrise/step:
           checkout: false
+          store-artifacts: false
+          store-test-results: false
           id: certificate-and-profile-installer@1
           inputs: |
             certificate_url: $IOS_CERTIFICATE_URL
@@ -141,11 +141,12 @@ jobs:
             project_path: MyApp.xcworkspace
             scheme: MyApp
             distribution_method: app-store
+          # store-artifacts/store-test-results default to true, so THIS call is the one
+          # that actually publishes /tmp/bitrise-orb/deploy -- the first call above
+          # disabled its own copy of the same default since nothing was built yet.
       - run:
           name: Use the .ipa Bitrise just built
           command: echo "xcode-archive produced $BITRISE_IPA_PATH"
-      - store_artifacts:
-          path: /tmp/bitrise-orb/deploy
 workflows:
   ios-release:
     jobs:
@@ -182,10 +183,60 @@ This table is a migration aid for humans reading their old Stack setting, not so
 | `CIRCLE_PROJECT_REPONAME` | `BITRISE_APP_TITLE` |
 | (job's working directory) | `BITRISE_SOURCE_DIR` |
 | (the `deploy-dir` parameter, created for you) | `BITRISE_DEPLOY_DIR` |
+| (the `test-results-dir` parameter, created for you) | `BITRISE_TEST_DEPLOY_DIR` |
 
-Point `store_artifacts`/`store_test_results` at `deploy-dir` (default `/tmp/bitrise-orb/deploy`) in a later step to publish whatever the Step deposited there -- that's this orb's equivalent of `deploy-to-bitrise-io`.
+**This orb owns its own lifecycle by default (Locked Decision: smart defaults).** `bitrise/step` automatically runs `store_artifacts` against `deploy-dir` (default `/tmp/bitrise-orb/deploy`) and `store_test_results` against `test-results-dir` (default `/tmp/bitrise-orb/test-results`) right after the Step -- that's this orb's equivalent of `deploy-to-bitrise-io`. You never need to write either step yourself. Set `store-artifacts: false` / `store-test-results: false` to disable either one (e.g. to call `store_artifacts` yourself with different options, or because you're chaining multiple `bitrise/step` calls in one job and only want the last one to publish -- see "Chaining two Bitrise Steps" above).
 
-**There's no single source of truth for that path.** `store_artifacts`/`store_test_results`'s `path:` field does not support runtime environment-variable substitution -- only a literal, compile-time-known path -- so you have to type the same path twice: once as the `deploy-dir` parameter, once as a hardcoded literal in your own `store_artifacts` step. If the two ever diverge (you override `deploy-dir` for one job and forget the matching `store_artifacts` edit), artifacts vanish with no error at all -- this orb's "no failure wrapping" philosophy means there's nothing to catch it. **If you override `deploy-dir`, update both.**
+Bitrise documents `$BITRISE_DEPLOY_DIR` and `$BITRISE_TEST_DEPLOY_DIR` as two **distinct** directories -- deploy artifacts vs. JUnit-XML test results -- so this orb creates and exports both separately, and defaults `store_test_results` at the test-results one specifically. Only certain Steps (`android-unit-test`, `xcode-test`, and similar) actually populate `$BITRISE_TEST_DEPLOY_DIR`; running an arbitrary third-party Step through this orb may deposit nothing there, which is a silent no-op for `store_test_results`, not a failure.
+
+Because the generated `store_artifacts`/`store_test_results` steps are templated from the exact same `deploy-dir`/`test-results-dir` orb parameters that get exported into `$BASH_ENV`, there's no path to type twice and no way for the two to drift apart -- override `deploy-dir` (or `test-results-dir`) once and both the export and the generated step move together. If you disable the defaults and write your own `store_artifacts`/`store_test_results` step instead, that step's own `path:` field still can't take a runtime environment-variable substitution (only a literal, compile-time-known path), so in that case only, you're back to typing the path yourself and keeping it in sync by hand.
+
+## Interleaving native CircleCI steps around the Bitrise Step
+
+The `bitrise/step` **job** (only when invoked from a workflow's `jobs:` list, not the `bitrise/step`
+**command** inside another job's own `steps:`) accepts CircleCI's own built-in `pre-steps`/`post-steps`
+arguments -- available on every 2.1+ job, not something this orb declares. Pass them at the call site:
+
+```yaml
+- bitrise/step:
+    executor: bitrise/macos
+    id: xcode-archive@6
+    inputs: |
+      project_path: MyApp.xcworkspace
+      scheme: MyApp
+    pre-steps:
+      - run: echo "before checkout AND before the Bitrise Step"
+    post-steps:
+      - run: echo "after the Bitrise Step; its outputs are already in $BASH_ENV"
+```
+
+**One real platform caveat, verified while re-checking this orb's expansion order (`pre-steps`, job
+steps, `post-steps`):** `pre-steps` run before **every** step in the job, including this job's own
+internal `checkout` -- not just before the Bitrise Step. If a pre-step needs the repo checked out
+first, either do that checkout yourself inside the pre-step, or use `checkout: false` on the job
+plus an explicit `checkout` as the first entry of `pre-steps`, so you control exactly where it
+lands relative to your other pre-steps:
+
+```yaml
+- bitrise/step:
+    executor: bitrise/macos
+    checkout: false
+    id: xcode-archive@6
+    inputs: |
+      project_path: MyApp.xcworkspace
+      scheme: MyApp
+    pre-steps:
+      - checkout
+      - run: echo "runs after checkout, still before the Bitrise Step"
+    post-steps:
+      - store_artifacts:
+          path: /tmp/bitrise-orb/deploy
+```
+
+Need several native steps and several Bitrise Steps interleaved in a specific order within one job
+(not just "before all" / "after all")? Reach for the `bitrise/step` **command** in a hand-rolled job
+instead -- see "Chaining two Bitrise Steps that share machine state" above -- since a command call is
+just one entry in an ordinary `steps:` list and can sit anywhere in it.
 
 ## Outputs
 
@@ -222,7 +273,7 @@ A specific, identifiable slice of Bitrise Steps call back to bitrise.io's own ho
 | Doesn't work | Why | Use instead |
 |---|---|---|
 | **Virtual Device Testing** (Android/iOS) | Proxies to Firebase Test Lab under **Bitrise's own** Firebase license and build-slug identity, not yours. | A CircleCI-native device-testing integration, or Firebase Test Lab directly under your own GCP project. |
-| **Deploy to Bitrise.io** | Authenticates against Bitrise's own Artifacts/Tests backend with a build-scoped `$BITRISE_BUILD_API_TOKEN` this orb never has. | `store_artifacts` / `store_test_results` on `$BITRISE_DEPLOY_DIR` (see above). |
+| **Deploy to Bitrise.io** | Authenticates against Bitrise's own Artifacts/Tests backend with a build-scoped `$BITRISE_BUILD_API_TOKEN` this orb never has. | `store_artifacts` / `store_test_results` on `$BITRISE_DEPLOY_DIR` / `$BITRISE_TEST_DEPLOY_DIR` -- already automatic by default, see above. |
 | **Bitrise Build Cache** (Gradle/Bazel/Xcode remote cache) | A co-located, datacenter-local cache/proxy service gated behind a Bitrise workspace token. | Your build tool's own remote-cache config pointed at infrastructure you control, or plain CircleCI `save_cache`/`restore_cache`. |
 | **Save/Restore Cache Steps** (and the dependency-manager-specific ones: Cocoapods, Gradle, SPM, ...) | The cache archive store is scoped to "your Bitrise project" and billed/retained per Bitrise plan -- it isn't something you can point at other infrastructure. | `save_cache`/`restore_cache` with the same keys/paths the dedicated Step would have used. |
 | **`register_test_devices` input on `xcode-archive`/`manage-ios-code-signing`** | Registers "the known test devices **on Bitrise** from team members" with the Apple Developer Portal -- that device roster lives in Bitrise's own account data, not exposed via an API this orb could substitute. | Register test devices directly in the Apple Developer portal, or via `fastlane`'s own `register_devices` action with your own Apple credentials. |
@@ -240,6 +291,10 @@ By contrast, **iOS/Android code signing itself is not a hard blocker**: `xcode-a
 ## How to Contribute
 
 Bug reports and feature requests are welcome via [Issues](https://github.com/CircleCI-Labs/bitrise-orb/issues). Pull requests are welcome via the usual GitHub flow.
+
+**CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
+
+**`pre-steps`/`post-steps` are reserved job-parameter names.** `circleci orb validate` rejects a job parameter literally named `pre-steps` or `post-steps` outright -- this only surfaces under `orb validate`, which needs a token, so a plain `circleci config validate`/pack will not catch it. If you're adding a new job parameter, don't pick either name.
 
 ## How to Publish An Update
 

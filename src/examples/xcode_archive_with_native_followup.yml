@@ -28,8 +28,8 @@ usage:
             command: |
               echo "xcode-archive produced: $BITRISE_IPA_PATH"
               ls -la "$BITRISE_IPA_PATH"
-        - store_artifacts:
-            path: /tmp/bitrise-orb/deploy
+        # No manual store_artifacts needed -- the bitrise/step command above already ran
+        # it against $BITRISE_DEPLOY_DIR, since store-artifacts defaults to true.
   workflows:
     ios-release:
       jobs:

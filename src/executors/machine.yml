@@ -19,7 +19,7 @@ parameters:
   docker-layer-caching:
     type: boolean
     default: false
-    description: Enable Docker layer caching for this executor (only useful if before-steps/after-steps you add also use Docker).
+    description: Enable Docker layer caching for this executor (only useful if pre-steps/post-steps you add also use Docker).
 
 machine:
   image: <<parameters.image>>

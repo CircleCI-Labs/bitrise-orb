@@ -2,12 +2,18 @@ description: >
   Run exactly one Bitrise Step inside this job, using the Bitrise CLI locally -- no
   bitrise.io account or token. Composes this orb's install / create-config / map-env /
   collect-outputs / run-bitrise commands in the one order that makes the whole thing work
-  end to end. Each stage can be individually skipped so a future multi-Step orb call can
+  end to end, then owns its own lifecycle by default: a `store_artifacts` step against
+  deploy-dir and a `store_test_results` step against test-results-dir, each independently
+  disable-able. Each stage can be individually skipped so a future multi-Step orb call can
   reuse an already-installed CLI or an already-applied env mapping within the same job
   without a breaking change to this command's shape. Most users should reach for the
-  `bitrise/step` job instead, which wraps this command with an explicit executor choice
-  and before-steps/after-steps hooks; use this command directly only if you're composing it
-  into a hand-rolled job of your own.
+  `bitrise/step` job instead, which wraps this command with an explicit executor choice;
+  use this command directly if you're composing it into a hand-rolled job of your own --
+  e.g. to interleave native CircleCI steps with a Bitrise Step, or to chain several Bitrise
+  Steps that share on-disk/keychain state. Native CircleCI `pre-steps:`/`post-steps:` (at
+  the job-invocation call site) cover interleaving native steps around a `bitrise/step`
+  job; see the README for the pattern, including the caveat that `pre-steps` run before
+  even this command's own `checkout`.
 
 parameters:
   checkout:
@@ -65,8 +71,34 @@ parameters:
     type: string
     default: "/tmp/bitrise-orb/deploy"
     description: >
-      Directory exported as $BITRISE_DEPLOY_DIR. Point store_artifacts/store_test_results
-      at this path in a later step to publish whatever the Step deposited there.
+      Directory exported as $BITRISE_DEPLOY_DIR. This orb's `store-artifacts` default
+      already runs `store_artifacts` against this exact path for you.
+  store-artifacts:
+    type: boolean
+    default: true
+    description: >
+      Automatically run `store_artifacts` against deploy-dir after the Step, so the Step
+      owns publishing whatever it deposited there with zero extra config -- this orb's
+      lifecycle, not something you're expected to check in yourself. Disable if you'd
+      rather call `store_artifacts` yourself (e.g. to rename/redirect it in the CircleCI
+      UI), or if you're calling this command more than once in the same job and only
+      want the artifact upload after the last call.
+  test-results-dir:
+    type: string
+    default: "/tmp/bitrise-orb/test-results"
+    description: >
+      Directory exported as $BITRISE_TEST_DEPLOY_DIR -- Bitrise's own, distinct "root
+      directory for all test results" (JUnit XML). This orb's `store-test-results`
+      default already runs `store_test_results` against this exact path for you. Only
+      certain Steps (android-unit-test, xcode-test, and similar) actually populate it --
+      an arbitrary third-party Step may write nothing here, which is a silent no-op.
+  store-test-results:
+    type: boolean
+    default: true
+    description: >
+      Automatically run `store_test_results` against test-results-dir after the Step.
+      Disable if you'd rather call `store_test_results` yourself, or if you're calling
+      this command more than once in the same job and only want it after the last call.
   extra-env:
     type: string
     default: ""
@@ -125,6 +157,7 @@ steps:
       steps:
         - map-env:
             deploy-dir: <<parameters.deploy-dir>>
+            test-results-dir: <<parameters.test-results-dir>>
             extra-env: <<parameters.extra-env>>
             skip-default-mapping: <<parameters.skip-default-env-mapping>>
   - when:
@@ -141,3 +174,13 @@ steps:
   - run-bitrise:
       config-path: <<parameters.config-path>>
       workflow-name: <<parameters.workflow-name>>
+  - when:
+      condition: <<parameters.store-artifacts>>
+      steps:
+        - store_artifacts:
+            path: <<parameters.deploy-dir>>
+  - when:
+      condition: <<parameters.store-test-results>>
+      steps:
+        - store_test_results:
+            path: <<parameters.test-results-dir>>

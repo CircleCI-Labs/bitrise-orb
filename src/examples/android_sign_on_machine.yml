@@ -26,6 +26,5 @@ usage:
               keystore_password: $ANDROID_KEYSTORE_PASSWORD
               keystore_alias: $ANDROID_KEYSTORE_ALIAS
               private_key_password: $ANDROID_KEY_PASSWORD
-            after-steps:
-              - store_artifacts:
-                  path: /tmp/bitrise-orb/deploy
+            # No manual store_artifacts needed -- store-artifacts defaults to true, so
+            # this orb already publishes $BITRISE_DEPLOY_DIR for you.

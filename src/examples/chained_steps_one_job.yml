@@ -8,7 +8,11 @@ description: >
   certificate-and-profile-installer sets up on job 1 simply does not exist on job 2's
   fresh machine, unlike Steps inside one Bitrise Workflow, which always share a machine.
   `checkout: false` plus `skip-install`/`skip-map-env` on the second `bitrise/step` call
-  avoid redoing work the first call already did in this same job.
+  avoid redoing work the first call already did in this same job. `store-artifacts:
+  false`/`store-test-results: false` on the FIRST call avoid publishing an empty/partial
+  deploy-dir before the second Step has actually produced anything -- each `bitrise/step`
+  command call defaults to owning its own lifecycle, so with two calls in one job you
+  choose which call's default should be the one that actually runs.
 
 usage:
   version: 2.1
@@ -21,6 +25,8 @@ usage:
         - checkout
         - bitrise/step:
             checkout: false
+            store-artifacts: false
+            store-test-results: false
             id: certificate-and-profile-installer@1
             inputs: |
               certificate_url: $IOS_CERTIFICATE_URL
@@ -35,11 +41,11 @@ usage:
               project_path: MyApp.xcworkspace
               scheme: MyApp
               distribution_method: app-store
+            # store-artifacts/store-test-results default to true here, so this second
+            # call is the one that actually publishes $BITRISE_DEPLOY_DIR.
         - run:
             name: Use the .ipa Bitrise just built
             command: echo "xcode-archive produced $BITRISE_IPA_PATH"
-        - store_artifacts:
-            path: /tmp/bitrise-orb/deploy
   workflows:
     ios-release:
       jobs:

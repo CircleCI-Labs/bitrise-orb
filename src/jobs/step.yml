@@ -1,15 +1,12 @@
-# NOTE: this job's hook parameters are named "before-steps"/"after-steps", not
-# CircleCI's own "pre-steps"/"post-steps" wording. Those two exact strings are reserved
-# job-parameter names -- "circleci orb validate" rejects a job parameter literally named
-# "pre-steps"/"post-steps" outright -- discovered while re-verifying this orb.
 description: >
   Run a single Bitrise Step as its own CircleCI job, on an executor you choose
   explicitly (bitrise/macos or bitrise/machine -- see this orb's README for why there's
   no default). Wraps the `bitrise/step` command and forwards every one of its
-  parameters, plus optional before-steps/after-steps so you can interleave native
-  CircleCI steps immediately before/after the Bitrise Step -- e.g. reading
-  $BITRISE_IPA_PATH (or any other verbatim Bitrise output env var) that landed in
-  $BASH_ENV.
+  parameters. To interleave native CircleCI steps immediately before/after the Bitrise
+  Step -- e.g. reading $BITRISE_IPA_PATH (or any other verbatim Bitrise output env var)
+  that landed in $BASH_ENV -- use CircleCI's own native `pre-steps:`/`post-steps:` at the
+  job-invocation call site (see this orb's README for the pattern and an important
+  caveat: `pre-steps` run BEFORE even this job's own `checkout`).
 
 parameters:
   executor:
@@ -22,15 +19,7 @@ parameters:
   checkout:
     type: boolean
     default: true
-    description: Check out the project before running anything else in this job, including before-steps.
-  before-steps:
-    type: steps
-    default: []
-    description: Steps to run before the Bitrise Step (after checkout, if enabled).
-  after-steps:
-    type: steps
-    default: []
-    description: Steps to run after the Bitrise Step and its output export.
+    description: Check out the project before running anything else in this job.
   id:
     type: string
     description: >
@@ -82,8 +71,29 @@ parameters:
     type: string
     default: "/tmp/bitrise-orb/deploy"
     description: >
-      Directory exported as $BITRISE_DEPLOY_DIR. Point store_artifacts/store_test_results
-      at this path in an after-steps step to publish whatever the Step deposited there.
+      Directory exported as $BITRISE_DEPLOY_DIR. This orb's `store-artifacts` default
+      already runs `store_artifacts` against this exact path for you.
+  store-artifacts:
+    type: boolean
+    default: true
+    description: >
+      Automatically run `store_artifacts` against deploy-dir after the Step -- this
+      orb's lifecycle, not something you're expected to check in yourself. Disable if
+      you'd rather call `store_artifacts` yourself, e.g. via `post-steps:`.
+  test-results-dir:
+    type: string
+    default: "/tmp/bitrise-orb/test-results"
+    description: >
+      Directory exported as $BITRISE_TEST_DEPLOY_DIR -- Bitrise's own, distinct "root
+      directory for all test results" (JUnit XML). This orb's `store-test-results`
+      default already runs `store_test_results` against this exact path for you. Only
+      certain Steps (android-unit-test, xcode-test, and similar) actually populate it.
+  store-test-results:
+    type: boolean
+    default: true
+    description: >
+      Automatically run `store_test_results` against test-results-dir after the Step.
+      Disable if you'd rather call `store_test_results` yourself, e.g. via `post-steps:`.
   extra-env:
     type: string
     default: ""
@@ -106,11 +116,11 @@ parameters:
   skip-install:
     type: boolean
     default: false
-    description: Skip installing the Bitrise CLI (e.g. a before-steps step already did).
+    description: Skip installing the Bitrise CLI (e.g. a pre-steps step already did).
   skip-map-env:
     type: boolean
     default: false
-    description: Skip exporting the CircleCI -> Bitrise environment mapping (e.g. a before-steps step already did).
+    description: Skip exporting the CircleCI -> Bitrise environment mapping (e.g. a pre-steps step already did).
   skip-collect-outputs:
     type: boolean
     default: false
@@ -123,7 +133,6 @@ steps:
       condition: <<parameters.checkout>>
       steps:
         - checkout
-  - <<parameters.before-steps>>
   - step:
       checkout: false
       id: <<parameters.id>>
@@ -135,6 +144,9 @@ steps:
       bin-dir: <<parameters.bin-dir>>
       cache-key-prefix: <<parameters.cache-key-prefix>>
       deploy-dir: <<parameters.deploy-dir>>
+      store-artifacts: <<parameters.store-artifacts>>
+      test-results-dir: <<parameters.test-results-dir>>
+      store-test-results: <<parameters.store-test-results>>
       extra-env: <<parameters.extra-env>>
       skip-default-env-mapping: <<parameters.skip-default-env-mapping>>
       config-path: <<parameters.config-path>>
@@ -142,4 +154,3 @@ steps:
       skip-install: <<parameters.skip-install>>
       skip-map-env: <<parameters.skip-map-env>>
       skip-collect-outputs: <<parameters.skip-collect-outputs>>
-  - <<parameters.after-steps>>

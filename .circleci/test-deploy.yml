@@ -98,13 +98,13 @@ workflows:
 
       # Proves this orb's single most load-bearing, least-obvious mechanism end to end,
       # on Linux, with no credentials, every single run: a Step's declared `envman add`
-      # output genuinely lands in $BASH_ENV as a real shell variable an after-steps step
+      # output genuinely lands in $BASH_ENV as a real shell variable a post-steps step
       # (or any later native step) can read.
       - bitrise/step:
           name: "Testing Output Export (path:: fixture, machine)"
           executor: bitrise/machine
           id: "path::./test/fixtures/local-step"
-          after-steps:
+          post-steps:
             - run:
                 name: Verify LOCAL_STEP_OUT was exported to BASH_ENV
                 command: |
@@ -131,7 +131,7 @@ workflows:
               envman add --key SMOKE_OUT --value "produced_by_script_step"
           extra-outputs: |
             SMOKE_OUT
-          after-steps:
+          post-steps:
             - run:
                 name: Verify SMOKE_OUT was exported to BASH_ENV
                 command: |
@@ -140,6 +140,58 @@ workflows:
                     exit 1
                   fi
                   echo "OK: SMOKE_OUT=${SMOKE_OUT}"
+          filters: *filters
+
+      # Proves Locked Decision #1 (smart defaults, no config): with store-artifacts and
+      # store-test-results left at their default (true), the job's own map-env stage
+      # must have already created both $BITRISE_DEPLOY_DIR and $BITRISE_TEST_DEPLOY_DIR
+      # -- checked here via a post-steps step, which also proves post-steps run AFTER
+      # this job's store_artifacts/store_test_results steps, not before them.
+      - bitrise/step:
+          name: "Testing smart defaults (store-artifacts/store-test-results, machine)"
+          executor: bitrise/machine
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              echo "marker" > "$BITRISE_DEPLOY_DIR/marker.txt"
+          post-steps:
+            - run:
+                name: Verify BITRISE_DEPLOY_DIR and BITRISE_TEST_DEPLOY_DIR were created by default
+                command: |
+                  for d in "$BITRISE_DEPLOY_DIR" "$BITRISE_TEST_DEPLOY_DIR"; do
+                    if [ ! -d "$d" ]; then
+                      echo "Expected directory '$d' to exist (created by map-env's smart defaults), but it does not." >&2
+                      exit 1
+                    fi
+                  done
+                  echo "OK: BITRISE_DEPLOY_DIR=$BITRISE_DEPLOY_DIR and BITRISE_TEST_DEPLOY_DIR=$BITRISE_TEST_DEPLOY_DIR both exist"
+          filters: *filters
+
+      # Proves the native pre-steps/post-steps pattern this orb's README documents for
+      # mid-job placement: checkout: false on the job, pre-steps: [checkout, ...] to run
+      # checkout (and anything else) BEFORE the Bitrise Step -- and specifically before
+      # this orb's own install/map-env/run-bitrise steps too, per the verified expansion
+      # order (pre-steps, job steps, post-steps).
+      - bitrise/step:
+          name: "Testing pre-steps checkout pattern (machine)"
+          executor: bitrise/machine
+          checkout: false
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              # If pre-steps ran before this job's own steps, the repo checkout (and this
+              # marker written by the pre-steps run below) must already be on disk.
+              test -f ./pre-steps-marker.txt
+              echo "OK: pre-steps-marker.txt was present before the Bitrise Step ran"
+          pre-steps:
+            - checkout
+            - run:
+                name: Write a pre-steps marker, before the Bitrise Step runs
+                command: echo "written by pre-steps" > ./pre-steps-marker.txt
           filters: *filters
 
       - test-certificate-and-profile-installer:
@@ -156,6 +208,8 @@ workflows:
             - "Testing Script Step (machine, no credentials)"
             - "Testing Output Export (path:: fixture, machine)"
             - "Testing extra-outputs (script@1 + envman add, machine)"
+            - "Testing smart defaults (store-artifacts/store-test-results, machine)"
+            - "Testing pre-steps checkout pattern (machine)"
             - test-certificate-and-profile-installer
             - test-sign-apk
 

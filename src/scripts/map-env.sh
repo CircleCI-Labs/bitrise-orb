@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Parameters, via `environment:`:
 #   ORB_VAL_DEPLOY_DIR             -- directory to create and export as $BITRISE_DEPLOY_DIR
+#   ORB_VAL_TEST_RESULTS_DIR       -- directory to create and export as $BITRISE_TEST_DEPLOY_DIR
 #   ORB_VAL_EXTRA_ENV              -- flat "NAME: value" YAML block of extra/override env vars, or ""
 #   ORB_VAL_SKIP_DEFAULT_MAPPING   -- boolean-as-string, "1"/"0" OR "true"/"false" (see below)
 #
@@ -33,6 +34,13 @@ orb_bool_is_true() {
 
 mkdir -p "${ORB_VAL_DEPLOY_DIR}"
 echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >>"$BASH_ENV"
+
+# $BITRISE_TEST_DEPLOY_DIR is documented by Bitrise as a directory DISTINCT from
+# $BITRISE_DEPLOY_DIR -- "root directory for all test results" (JUnit XML), vs. deploy
+# artifacts. Only certain Steps populate it; leaving it empty is a silent no-op for
+# store_test_results, not an error.
+mkdir -p "${ORB_VAL_TEST_RESULTS_DIR}"
+echo "export BITRISE_TEST_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_TEST_RESULTS_DIR}")" >>"$BASH_ENV"
 
 if ! orb_bool_is_true "${ORB_VAL_SKIP_DEFAULT_MAPPING:-}"; then
   echo "Mapping CircleCI's built-in environment variables onto their Bitrise equivalents..."

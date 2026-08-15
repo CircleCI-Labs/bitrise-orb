@@ -1,16 +1,31 @@
 description: >
   Export the CircleCI -> Bitrise environment variable mapping into $BASH_ENV (so it's
   live for every subsequent step in this job, including the Step Bitrise itself runs),
-  create the $BITRISE_DEPLOY_DIR directory, and apply any extra/override variables.
+  create the $BITRISE_DEPLOY_DIR and $BITRISE_TEST_DEPLOY_DIR directories (Bitrise's own
+  docs document these as two distinct directories -- deploy artifacts and JUnit-XML test
+  results respectively, each "created by the Bitrise CLI" -- not one directory doing
+  double duty), and apply any extra/override variables.
 
 parameters:
   deploy-dir:
     type: string
     default: "/tmp/bitrise-orb/deploy"
     description: >
-      Directory created and exported as $BITRISE_DEPLOY_DIR. Point store_artifacts /
-      store_test_results at this path in a later step to publish whatever the Step
-      deposited there -- this is this orb's equivalent of deploy-to-bitrise-io.
+      Directory created and exported as $BITRISE_DEPLOY_DIR. The `bitrise/step`
+      command's `store-artifacts` default already points a `store_artifacts` step at
+      this path for you -- this parameter exists so you can redirect that default, or
+      point your own manual store_artifacts step here if you disabled it.
+  test-results-dir:
+    type: string
+    default: "/tmp/bitrise-orb/test-results"
+    description: >
+      Directory created and exported as $BITRISE_TEST_DEPLOY_DIR -- Bitrise's own
+      "root directory for all test results," distinct from deploy-dir. Only certain
+      Steps (android-unit-test, xcode-test, and similar) actually populate this with
+      JUnit XML; an arbitrary third-party Step run through this orb may write nothing
+      here, which is a silent no-op, not a failure. The `bitrise/step` command's
+      `store-test-results` default already points a `store_test_results` step at this
+      path for you.
   extra-env:
     type: string
     default: ""
@@ -29,6 +44,7 @@ steps:
       name: "Mapping CircleCI environment onto Bitrise's"
       environment:
         ORB_VAL_DEPLOY_DIR: <<parameters.deploy-dir>>
+        ORB_VAL_TEST_RESULTS_DIR: <<parameters.test-results-dir>>
         ORB_VAL_EXTRA_ENV: <<parameters.extra-env>>
         ORB_VAL_SKIP_DEFAULT_MAPPING: <<parameters.skip-default-mapping>>
       command: <<include(scripts/map-env.sh)>>
