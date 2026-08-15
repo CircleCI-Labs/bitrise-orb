@@ -1,0 +1,142 @@
+description: >
+  Bootstraps the pinned SUBSET of Bitrise's own Ubuntu/Android stack toolchain that a
+  ported Bitrise Step actually needs and a plain CircleCI machine/cimg image doesn't
+  already provide -- this is NOT a mirror of Bitrise's full stack image. Bitrise's own
+  pullable vendor image (see the bitrise/android-toolchain executor) is a 10+GB,
+  years-stale snapshot; this command instead installs only the cluster of tools real,
+  popular Bitrise Steps were confirmed to actually need (Android build/sign, fastlane,
+  Node.js -- see this orb's README, "Stack bootstrap", for the research behind that
+  ranking), cached by exact resolved version so a warm run is fast, with every
+  direct-download artifact checksum-verified against this script's own vendored,
+  reviewable version table before it is ever unpacked or executed. Standalone and
+  entirely opt-in: nothing in this orb calls it for you -- skip it outright by never
+  invoking it, pick a `profile`, add ad hoc tools via `tools`, or both. Fails loudly,
+  naming the exact tool and the reason, whenever a profile/tool genuinely cannot run on
+  the current OS/architecture, rather than a confusing downstream error.
+
+parameters:
+  profile:
+    type: enum
+    enum: ["none", "android-build", "fastlane", "js-mobile"]
+    default: "none"
+    description: >
+      "none" (default): install nothing beyond the always-on zstd fix (see
+      install-zstd). "android-build": OpenJDK (apt) + Android SDK platform-tools/one
+      build-tools/one platform -- no emulator, no NDK; use the bitrise/android-toolchain
+      executor instead if a Step needs those. Linux/x86_64 only -- fails loudly
+      elsewhere. "fastlane": Ruby (apt) + the fastlane gem. Linux only -- fails loudly
+      on macOS (which already ships Ruby; install the gem directly there instead).
+      "js-mobile": Node.js (direct download, checksum-verified) + npm/Yarn/corepack.
+      Works on both Linux and macOS.
+  tools:
+    type: string
+    default: ""
+    description: >
+      Comma-separated name@version overrides/additions beyond `profile`, e.g.
+      "ripgrep@14.1.1,gh@2.86.0". Names (and, if given, versions) must exist in this
+      orb's pinned catalog (currently: ripgrep, gh) -- an unrecognized name, or a
+      version this orb hasn't vendored a checksum for, fails the step loudly rather than
+      being silently skipped. Omit the version to use the pinned one.
+  install-zstd:
+    type: boolean
+    default: true
+    description: >
+      Install zstd (apt on Linux, Homebrew on macOS) regardless of `profile` -- a hard,
+      confirmed dependency of current-generation Bitrise cache Steps (restore-cache/
+      save-cache both declare it). On by default so nothing depending on it silently
+      breaks; disable only if you know the target Step doesn't use them.
+  jdk-version:
+    type: string
+    default: "17"
+    description: "android-build only: OpenJDK major version to install via apt (\"openjdk-<N>-jdk-headless\")."
+  android-platform:
+    type: string
+    default: "35"
+    description: "android-build only: Android platform API level to install (e.g. \"35\" for \"platforms;android-35\")."
+  android-build-tools:
+    type: string
+    default: "35.0.0"
+    description: "android-build only: Android build-tools version to install (e.g. \"35.0.0\")."
+  android-sdk-root:
+    type: string
+    default: "/tmp/bitrise-orb/android-sdk"
+    description: "android-build only: directory exported as $ANDROID_HOME/$ANDROID_SDK_ROOT."
+  fastlane-version:
+    type: string
+    default: "2.236.1"
+    description: "fastlane only: fastlane gem version to install. Freely overridable -- RubyGems' own checksum protocol is the integrity mechanism, not a checksum vendored by this orb."
+  gem-home:
+    type: string
+    default: "/tmp/bitrise-orb/gems"
+    description: "fastlane only: directory exported as $GEM_HOME/$GEM_PATH for the fastlane gem install."
+  node-version:
+    type: string
+    default: "22.22.0"
+    description: >
+      js-mobile only: Node.js version to install. NOT freely overridable like
+      fastlane-version above -- Node.js is fetched by a bare curl with nothing else to
+      verify it, so this must exactly match the one version this orb vendors a checksum
+      for (the default). Changing it without also adding a checksum to
+      src/scripts/install-stack.sh fails loudly rather than skip verification.
+  node-root:
+    type: string
+    default: "/tmp/bitrise-orb/node"
+    description: "js-mobile only: directory the Node.js tarball is extracted into; its bin/ is added to PATH."
+  stack-bin-dir:
+    type: string
+    default: "/tmp/bitrise-orb/stack-bin"
+    description: Directory `tools` catalog binaries (ripgrep, gh) are installed into.
+  cache-key-prefix:
+    type: string
+    default: "v1"
+    description: Prefix applied to every cache key this command writes. Bump it to force a clean cache.
+  verify-checksums:
+    type: boolean
+    default: true
+    description: >
+      When true (default), every artifact this command downloads directly (not via
+      apt/gem/sdkmanager, each of which verifies itself) is checksum-verified against
+      this orb's vendored table before use; a mismatch fails the step. Never disable
+      outside local debugging of this orb itself.
+
+steps:
+  - run:
+      name: "Resolving init-stack plan (profile + tools)"
+      environment:
+        ORB_VAL_PROFILE: <<parameters.profile>>
+        ORB_VAL_TOOLS: <<parameters.tools>>
+        ORB_VAL_INSTALL_ZSTD: <<parameters.install-zstd>>
+        ORB_VAL_JDK_VERSION: <<parameters.jdk-version>>
+        ORB_VAL_ANDROID_PLATFORM: <<parameters.android-platform>>
+        ORB_VAL_ANDROID_BUILD_TOOLS: <<parameters.android-build-tools>>
+        ORB_VAL_NODE_VERSION: <<parameters.node-version>>
+        ORB_VAL_FASTLANE_VERSION: <<parameters.fastlane-version>>
+      command: <<include(scripts/resolve-stack-plan.sh)>>
+  - restore_cache:
+      name: "Restoring cached stack toolchain"
+      keys:
+        - <<parameters.cache-key-prefix>>-bitrise-cache-stack-{{ arch }}-{{ checksum "/tmp/.bitrise-orb-stack-plan" }}
+  - run:
+      name: "Installing stack toolchain (profile: << parameters.profile >>)"
+      environment:
+        ORB_VAL_PROFILE: <<parameters.profile>>
+        ORB_VAL_INSTALL_ZSTD: <<parameters.install-zstd>>
+        ORB_VAL_VERIFY_CHECKSUMS: <<parameters.verify-checksums>>
+        ORB_VAL_JDK_VERSION: <<parameters.jdk-version>>
+        ORB_VAL_ANDROID_PLATFORM: <<parameters.android-platform>>
+        ORB_VAL_ANDROID_BUILD_TOOLS: <<parameters.android-build-tools>>
+        ORB_VAL_ANDROID_SDK_ROOT: <<parameters.android-sdk-root>>
+        ORB_VAL_FASTLANE_VERSION: <<parameters.fastlane-version>>
+        ORB_VAL_GEM_HOME: <<parameters.gem-home>>
+        ORB_VAL_NODE_VERSION: <<parameters.node-version>>
+        ORB_VAL_NODE_ROOT: <<parameters.node-root>>
+        ORB_VAL_STACK_BIN_DIR: <<parameters.stack-bin-dir>>
+      command: <<include(scripts/install-stack.sh)>>
+  - save_cache:
+      name: "Caching stack toolchain"
+      key: <<parameters.cache-key-prefix>>-bitrise-cache-stack-{{ arch }}-{{ checksum "/tmp/.bitrise-orb-stack-plan" }}
+      paths:
+        - <<parameters.android-sdk-root>>
+        - <<parameters.gem-home>>
+        - <<parameters.node-root>>
+        - <<parameters.stack-bin-dir>>

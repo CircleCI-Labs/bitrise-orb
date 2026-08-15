@@ -1,0 +1,30 @@
+description: >
+  Bootstrap the pinned "android-build" slice of Bitrise's own Ubuntu/Android stack --
+  OpenJDK + Android SDK platform-tools/one build-tools/one platform, no emulator, no NDK
+  -- on the cheap bitrise/machine executor, then run an Android Step that needs it.
+  `bitrise/init-stack` is entirely standalone and opt-in: it only runs because it's
+  listed here; skip it outright on a job that doesn't need it. See this orb's README,
+  "Stack bootstrap", for the research behind why this profile installs exactly this and
+  nothing more, and for measured cold/warm timings.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  workflows:
+    android-release:
+      jobs:
+        - bitrise/step:
+            name: Build Android App (init-stack android-build profile)
+            executor: bitrise/machine
+            context: android-signing
+            pre-steps:
+              - bitrise/init-stack:
+                  profile: android-build
+            id: android-build@1
+            inputs: |
+              module: app
+              variant: release
+            # No emulator/NDK here -- if a Step genuinely needs those, use the
+            # bitrise/android-toolchain executor's full vendor image instead (see the
+            # README's "Choosing an executor" section).
