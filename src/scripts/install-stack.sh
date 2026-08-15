@@ -496,14 +496,23 @@ esac
 install_catalog_tools
 
 echo "init-stack finished. Versions on PATH after this command:"
-# Each check is deliberately non-fatal (trailing "|| true") -- this is an informational
-# summary, not a gate, so a tool this run legitimately didn't install must not abort the
-# script under `set -e` just because it's absent.
-command -v zstd > /dev/null 2>&1 && (zstd --version 2>&1 | head -1) || true
-command -v java > /dev/null 2>&1 && (java -version 2>&1 | head -1) || true
-command -v ruby > /dev/null 2>&1 && ruby --version || true
-command -v fastlane > /dev/null 2>&1 && (fastlane --version 2>&1 | head -1) || true
-command -v node > /dev/null 2>&1 && node --version || true
-command -v rg > /dev/null 2>&1 && (rg --version | head -1) || true
-command -v gh > /dev/null 2>&1 && (gh --version | head -1) || true
+# Each check is deliberately non-fatal -- this is an informational summary, not a gate,
+# so a tool this run legitimately didn't install must not abort the script under
+# `set -e` just because it's absent. Plain "if" blocks rather than "A && B || true"
+# (SC2015 -- C would also run if B itself failed, which doesn't matter for an
+# informational printout, but the explicit form is clearer and keeps the lint clean).
+print_version_if_present() {
+  local bin="$1"
+  shift
+  if command -v "${bin}" > /dev/null 2>&1; then
+    "$@" 2>&1 | head -1 || true
+  fi
+}
+print_version_if_present zstd zstd --version
+print_version_if_present java java -version
+print_version_if_present ruby ruby --version
+print_version_if_present fastlane fastlane --version
+print_version_if_present node node --version
+print_version_if_present rg rg --version
+print_version_if_present gh gh --version
 exit 0
