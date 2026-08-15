@@ -47,7 +47,7 @@ parse_flat_yaml_block() {
   # under `set -e` that could abort this whole script instead of just meaning "no inputs".
   local raw_stripped="${raw//[$' \t\n']/}"
   if [[ -z "${raw_stripped}" ]]; then
-    echo '[]' >"${out_file}"
+    echo '[]' > "${out_file}"
     return
   fi
 
@@ -68,9 +68,9 @@ parse_flat_yaml_block() {
     # misparse it into numeric "0"/"1" keys with no error at all (ux-north-star review,
     # Finding #1). Both shapes are accepted for exactly this reason -- Bitrise's own
     # syntax verbatim, or this orb's simpler flat shorthand.
-    printf '%s\n' "${raw}" >"${list_file}"
+    printf '%s\n' "${raw}" > "${list_file}"
   elif [[ "${shape}" == "!!map" ]]; then
-    printf '%s\n' "${raw}" | yq eval 'to_entries | map({(.key): .value})' - >"${list_file}"
+    printf '%s\n' "${raw}" | yq eval 'to_entries | map({(.key): .value})' - > "${list_file}"
   else
     echo "bitrise-orb: 'inputs'/'outputs' must be either flat \"key: value\" pairs or Bitrise's own list-of-maps \"- key: value\" shape -- got a bare ${shape#!!} value:" >&2
     printf '%s\n' "${raw}" >&2
@@ -103,7 +103,7 @@ parse_flat_yaml_block "${ORB_VAL_OUTPUTS}" "${OUTPUTS_LIST_FILE}"
 STEP_BLOCK_FILE="${WORK_DIR}/.step-block.yml"
 ORB_VAL_ID="${ORB_VAL_ID}" INPUTS_LIST_FILE="${INPUTS_LIST_FILE}" \
   yq eval -n '{(strenv(ORB_VAL_ID)): {"inputs": load(strenv(INPUTS_LIST_FILE))}}' \
-  >"${STEP_BLOCK_FILE}"
+  > "${STEP_BLOCK_FILE}"
 
 if [[ "$(yq eval 'length' "${OUTPUTS_LIST_FILE}")" != "0" ]]; then
   # Bitrise's own config-level output aliasing (`outputs: - ORIGINAL_KEY: alias`).
@@ -130,7 +130,7 @@ STEP_LIB_SOURCE="${ORB_VAL_STEP_LIB_SOURCE}" WORKFLOW_NAME="${ORB_VAL_WORKFLOW_N
         "steps": [load(strenv(STEP_BLOCK_FILE))]
       }
     }
-  }' >"${ORB_VAL_CONFIG_PATH}"
+  }' > "${ORB_VAL_CONFIG_PATH}"
 
 echo "Synthesized bitrise.yml at ${ORB_VAL_CONFIG_PATH}:"
 cat "${ORB_VAL_CONFIG_PATH}"

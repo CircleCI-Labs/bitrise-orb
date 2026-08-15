@@ -21,9 +21,9 @@ if [[ "${ORB_VAL_BITRISE_VERSION}" == "latest" ]]; then
     echo "bitrise-orb: could not resolve the latest Bitrise CLI version from the GitHub API." >&2
     exit 1
   fi
-  echo "${LATEST_TAG}" >"${VERSION_FILE}"
+  echo "${LATEST_TAG}" > "${VERSION_FILE}"
 else
-  echo "${ORB_VAL_BITRISE_VERSION}" >"${VERSION_FILE}"
+  echo "${ORB_VAL_BITRISE_VERSION}" > "${VERSION_FILE}"
 fi
 
 echo "Resolved Bitrise CLI version: $(cat "${VERSION_FILE}")"

@@ -80,7 +80,7 @@ fi
 echo "Discovering declared outputs via: stepman ${STEPMAN_ARGS[*]}"
 STEP_INFO_JSON=""
 STEPMAN_ERR_FILE="$(mktemp)"
-if OUTPUT="$(stepman "${STEPMAN_ARGS[@]}" 2>"${STEPMAN_ERR_FILE}")"; then
+if OUTPUT="$(stepman "${STEPMAN_ARGS[@]}" 2> "${STEPMAN_ERR_FILE}")"; then
   STEP_INFO_JSON="${OUTPUT}"
 else
   # Output discovery is a convenience layered on top of running the Step, not a
@@ -123,7 +123,7 @@ while IFS= read -r name; do
     exit 1
   fi
   EXTRA_KEYS+=("${name}")
-done <<<"${ORB_VAL_EXTRA_OUTPUTS}"
+done <<< "${ORB_VAL_EXTRA_OUTPUTS}"
 
 # Union + de-duplicate, without relying on bash 4+ associative arrays (CircleCI's macOS
 # executor's default /bin/bash is 3.2, which has none) -- a delimited "seen" string and a
@@ -161,7 +161,7 @@ parse_flat_yaml_block() {
   local raw="$1" out_file="$2"
   local raw_stripped="${raw//[$' \t\n']/}"
   if [[ -z "${raw_stripped}" ]]; then
-    echo '[]' >"${out_file}"
+    echo '[]' > "${out_file}"
     return
   fi
 
@@ -176,9 +176,9 @@ parse_flat_yaml_block() {
   local list_file
   list_file="$(mktemp)"
   if [[ "${shape}" == "!!seq" ]]; then
-    printf '%s\n' "${raw}" >"${list_file}"
+    printf '%s\n' "${raw}" > "${list_file}"
   elif [[ "${shape}" == "!!map" ]]; then
-    printf '%s\n' "${raw}" | yq eval 'to_entries | map({(.key): .value})' - >"${list_file}"
+    printf '%s\n' "${raw}" | yq eval 'to_entries | map({(.key): .value})' - > "${list_file}"
   else
     echo "bitrise-orb: 'outputs' must be either flat \"key: value\" pairs or Bitrise's own list-of-maps \"- key: value\" shape -- got a bare ${shape#!!} value:" >&2
     printf '%s\n' "${raw}" >&2

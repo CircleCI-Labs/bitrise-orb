@@ -39,7 +39,7 @@ if [[ "${OS}" == "Linux" && "${ARCH}" == "arm64" ]]; then
   exit 1
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
+if ! command -v jq > /dev/null 2>&1; then
   echo "bitrise-orb: this orb requires 'jq' on PATH (used to parse stepman's JSON output)." >&2
   echo "jq ships preinstalled on CircleCI's cimg/* and machine images; install it first if you're on a custom image." >&2
   exit 1
@@ -57,7 +57,7 @@ fi
 # on an exact-key miss) could silently be accepted as a match for the version actually
 # requested. Extract the dotted version number and compare with "==" instead.
 bitrise_installed_version() {
-  "${ORB_VAL_BIN_DIR}/bitrise" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+  "${ORB_VAL_BIN_DIR}/bitrise" --version 2> /dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
 if [[ -x "${ORB_VAL_BIN_DIR}/bitrise" ]] && [[ "$(bitrise_installed_version)" == "${BITRISE_VERSION_TAG#v}" ]]; then
@@ -86,7 +86,7 @@ fi
 # publishes assets under this yq_<os>_<arch> naming, before the first real release of
 # this orb.
 YQ_VERSION="v4.44.3"
-if [[ -x "${ORB_VAL_BIN_DIR}/yq" ]] && [[ "$("${ORB_VAL_BIN_DIR}/yq" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" == "${YQ_VERSION#v}" ]]; then
+if [[ -x "${ORB_VAL_BIN_DIR}/yq" ]] && [[ "$("${ORB_VAL_BIN_DIR}/yq" --version 2> /dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" == "${YQ_VERSION#v}" ]]; then
   echo "yq ${YQ_VERSION} already present at ${ORB_VAL_BIN_DIR}/yq (cache hit) -- skipping download."
 else
   YQ_OS="$(echo "${OS}" | tr '[:upper:]' '[:lower:]')"
@@ -115,7 +115,7 @@ fi
 # sourcing time, exactly as intended.
 {
   printf 'export PATH=%s:$HOME/.bitrise/tools:$PATH\n' "$(printf '%q' "${ORB_VAL_BIN_DIR}")"
-} >>"$BASH_ENV"
+} >> "$BASH_ENV"
 export PATH="${ORB_VAL_BIN_DIR}:$HOME/.bitrise/tools:$PATH"
 
 if [[ "${OS}" == "Linux" ]]; then
@@ -128,7 +128,7 @@ if [[ "${OS}" == "Linux" ]]; then
   # install it defensively and cheaply here rather than risk failing deep inside
   # stepman's own activation logic later. Re-check this against a real
   # bitrise/machine job and drop it if CircleCI's images already ship rsync.
-  if ! command -v rsync >/dev/null 2>&1; then
+  if ! command -v rsync > /dev/null 2>&1; then
     echo "Installing rsync (required by stepman to activate Bitrise Steps)..."
     if [[ "${EUID}" == 0 ]]; then
       SUDO_CMD=""

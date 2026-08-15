@@ -33,14 +33,14 @@ orb_bool_is_true() {
 }
 
 mkdir -p "${ORB_VAL_DEPLOY_DIR}"
-echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >>"$BASH_ENV"
+echo "export BITRISE_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_DEPLOY_DIR}")" >> "$BASH_ENV"
 
 # $BITRISE_TEST_DEPLOY_DIR is documented by Bitrise as a directory DISTINCT from
 # $BITRISE_DEPLOY_DIR -- "root directory for all test results" (JUnit XML), vs. deploy
 # artifacts. Only certain Steps populate it; leaving it empty is a silent no-op for
 # store_test_results, not an error.
 mkdir -p "${ORB_VAL_TEST_RESULTS_DIR}"
-echo "export BITRISE_TEST_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_TEST_RESULTS_DIR}")" >>"$BASH_ENV"
+echo "export BITRISE_TEST_DEPLOY_DIR=$(printf '%q' "${ORB_VAL_TEST_RESULTS_DIR}")" >> "$BASH_ENV"
 
 if ! orb_bool_is_true "${ORB_VAL_SKIP_DEFAULT_MAPPING:-}"; then
   echo "Mapping CircleCI's built-in environment variables onto their Bitrise equivalents..."
@@ -51,7 +51,7 @@ if ! orb_bool_is_true "${ORB_VAL_SKIP_DEFAULT_MAPPING:-}"; then
     [[ -n "${CIRCLE_TAG:-}" ]] && echo "export BITRISE_GIT_TAG=$(printf '%q' "${CIRCLE_TAG}")"
     [[ -n "${CIRCLE_BUILD_NUM:-}" ]] && echo "export BITRISE_BUILD_NUMBER=$(printf '%q' "${CIRCLE_BUILD_NUM}")"
     [[ -n "${CIRCLE_PROJECT_REPONAME:-}" ]] && echo "export BITRISE_APP_TITLE=$(printf '%q' "${CIRCLE_PROJECT_REPONAME}")"
-  } >>"$BASH_ENV"
+  } >> "$BASH_ENV"
 else
   echo "skip-default-mapping is true -- not exporting the built-in CircleCI -> Bitrise environment mapping."
 fi
@@ -87,8 +87,8 @@ if [[ -n "${ORB_VAL_EXTRA_ENV// /}" ]]; then
       exit 1
     fi
     value="$(circleci env subst "${raw_value}")"
-    echo "export ${key}=$(printf '%q' "${value}")" >>"$BASH_ENV"
-  done <<<"${ORB_VAL_EXTRA_ENV}"
+    echo "export ${key}=$(printf '%q' "${value}")" >> "$BASH_ENV"
+  done <<< "${ORB_VAL_EXTRA_ENV}"
 fi
 
 echo "bitrise-orb environment mapping applied. Exported BITRISE_* variables:"

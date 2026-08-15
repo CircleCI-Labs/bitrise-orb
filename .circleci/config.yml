@@ -2,8 +2,8 @@ version: 2.1
 setup: true
 
 orbs:
-  orb-tools: circleci/orb-tools@12.3
-  shellcheck: circleci/shellcheck@3.2
+  orb-tools: circleci/orb-tools@12.5.0
+  shellcheck: circleci/shellcheck@3.4.0
 
 filters: &filters
   tags:
@@ -21,6 +21,20 @@ jobs:
       - run:
           name: Check CircleCI CLI version floor (>= 1.0.48254)
           command: bash scripts/check-circleci-cli-version.sh
+  shfmt-check:
+    # Pinned to an exact tag of the maintainer's own published image -- no
+    # credentials required, matches this repo's "pin everything" posture.
+    docker:
+      - image: mvdan/shfmt:v3.13.1-alpine
+    steps:
+      - checkout
+      - run:
+          name: shfmt (shell formatting)
+          # This repo's scripts use 2-space indentation (unlike bitbucket-pipes-orb/
+          # buildkite-orb's 4-space convention) -- match the convention already in
+          # place here rather than force a large, risk-bearing reformat of
+          # security-sensitive scripts.
+          command: shfmt -i 2 -ci -sr -d src/scripts/*.sh
 
 workflows:
   lint-pack:
@@ -40,8 +54,17 @@ workflows:
           # human-readable convention across CircleCI's own published orbs, and the
           # convention this orb's design spec explicitly mandates, matching
           # CircleCI-Labs/act-orb (which excludes the same rule for the same reason).
+          #
+          # RC006 flags display.source_url as unreachable. This repo is currently
+          # PRIVATE, and RC006's check is an UNAUTHENTICATED reachability probe --
+          # anonymous GitHub returns 404 for a private repo regardless of whether the
+          # URL is correct, so this fails even though src/@orb.yml's source_url
+          # genuinely is reachable by anyone with repo access. This exclusion MUST be
+          # removed once the repo goes public, at which point RC006 will pass on its
+          # own with no config change needed here.
+          #
           # Every other RC rule runs with zero exclusions.
-          exclude: "RC010"
+          exclude: "RC010,RC006"
           filters: *filters
       - shellcheck/check:
           # SC2148 (missing shebang -- these are <<include(...)>>'d into a `command:`
@@ -56,9 +79,11 @@ workflows:
           # to defer expansion into generated shell/yq source).
           exclude: SC2148,SC2038,SC2086,SC2002,SC2016
           filters: *filters
+      - shfmt-check:
+          filters: *filters
       - orb-tools/continue:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: bitrise
-          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check, shfmt-check]
           filters: *filters

@@ -15,7 +15,7 @@
 version: 2.1
 
 orbs:
-  orb-tools: circleci/orb-tools@12.3
+  orb-tools: circleci/orb-tools@12.5.0
   bitrise: {} # <- the just-packed dev orb is injected here at continuation time
 
 filters: &filters
@@ -79,6 +79,317 @@ jobs:
             keystore_password: $ANDROID_TEST_KEYSTORE_PASSWORD
             keystore_alias: $ANDROID_TEST_KEYSTORE_ALIAS
             private_key_password: $ANDROID_TEST_KEY_PASSWORD
+
+  # Regression test for shell-correctness review Finding #1 (CRITICAL -- arbitrary
+  # command execution). collect-outputs.sh validates every output KEY/ALIAS against a
+  # strict identifier pattern before splicing it into generated bash source; an
+  # unvalidated alias like `HOME}"; touch /tmp/PWNED; a="` would otherwise close the
+  # surrounding expansion/quote early and drop an arbitrary command into the collector
+  # script. Exercises the real create-config/collect-outputs scripts directly (no
+  # credentials, no vendor Step execution needed -- the guard fires before `bitrise run`
+  # is ever invoked). Verified locally against the real bitrise CLI + stepman before
+  # being added here: the malicious alias is refused with the documented error and
+  # /tmp/PWNED is never created.
+  test-collect-outputs-hijack-regression:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/install
+      - bitrise/create-config:
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              envman add --key SOME_KEY --value hijack_test
+      - run:
+          name: Regression test - a hostile output alias is refused, not spliced into generated shell
+          command: |
+            set +e
+            rm -f /tmp/PWNED
+            error_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_OUTPUTS='SOME_KEY: HOME}"; touch /tmp/PWNED; a="' \
+              ORB_VAL_EXTRA_OUTPUTS='SOME_KEY' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='.bitrise-orb.generated.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              bash src/scripts/collect-outputs.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected collect-outputs.sh to refuse the hostile alias, but it exited 0" >&2
+              echo "${error_output}" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"refusing to use output alias"*) ;;
+              *)
+                echo "FAIL: expected the 'refusing to use output alias' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            if [ -f /tmp/PWNED ]; then
+              echo "FAIL: /tmp/PWNED was created -- the hostile alias reached generated shell source" >&2
+              exit 1
+            fi
+            echo "OK: hostile output alias was refused before ever reaching generated shell source, and /tmp/PWNED was never created."
+
+  # Regression test for shell-correctness review Finding #2. create-config.sh parses the
+  # RAW inputs block into YAML first, then substitutes each already-parsed scalar value
+  # individually via strenv() -- never re-tokenizing a resolved secret's bytes as YAML
+  # syntax. Reproduces the exact hazard: a secret containing "#", ": ", and an embedded
+  # newline + a fake "key: value" line, referenced as $FAKE_SECRET in "inputs". Verified
+  # locally: the secret survives as one literal multi-line string value on exactly one
+  # synthesized Step.
+  test-create-config-yaml-injection-regression:
+    executor: bitrise/machine
+    environment:
+      FAKE_SECRET: "value#with-a-hash: still-one-value\nFAKE_INJECTED_KEY: pwned"
+    steps:
+      - checkout
+      - bitrise/install
+      - bitrise/create-config:
+          id: script@1
+          inputs: |
+            content: $FAKE_SECRET
+      - run:
+          name: Regression test - a YAML-hostile secret value lands as one literal string, not live YAML
+          command: |
+            set -euo pipefail
+            content="$(yq eval '.workflows.orb-step.steps[0]["script@1"].inputs[0].content' .bitrise-orb.generated.yml)"
+            expected="$(printf 'value#with-a-hash: still-one-value\nFAKE_INJECTED_KEY: pwned')"
+            if [ "${content}" != "${expected}" ]; then
+              echo "FAIL: expected the synthesized Step's 'content' input to equal the secret's exact literal value." >&2
+              echo "--- expected ---" >&2
+              printf '%s\n' "${expected}" >&2
+              echo "--- got ---" >&2
+              printf '%s\n' "${content}" >&2
+              exit 1
+            fi
+            # And it must be exactly ONE Step in exactly ONE workflow -- a smuggled "key:
+            # value" line becoming live YAML would show up as extra document structure.
+            step_count="$(yq eval '.workflows.orb-step.steps | length' .bitrise-orb.generated.yml)"
+            if [ "${step_count}" != "1" ]; then
+              echo "FAIL: expected exactly 1 synthesized Step, got ${step_count} -- the secret's '#'/': '/newline became live YAML syntax." >&2
+              exit 1
+            fi
+            echo "OK: the YAML-hostile secret value survived as one literal string; no extra YAML structure was created."
+
+  # Regression test for shell-correctness review Finding #3, using the exact
+  # reproduction from map-env.sh's own comment: `extra-env: "DB_PASSWORD: $SECRET"` with
+  # SECRET containing an embedded newline + a fake "MALICIOUS_INJECTED_VAR: pwned" line.
+  # map-env.sh splits the RAW (pre-substitution) text into lines first, then substitutes
+  # each line's value individually -- so a newline that only appears in the *resolved*
+  # value can never be reinterpreted as a new "NAME: value" line. Verified locally
+  # against the real script.
+  test-map-env-extra-env-injection-regression:
+    docker:
+      - image: cimg/base:current
+    environment:
+      SECRET: "s3cr3t\nMALICIOUS_INJECTED_VAR: pwned"
+    steps:
+      - checkout
+      - run:
+          name: Regression test - a secret's embedded newline cannot smuggle in a second env var
+          command: |
+            set -euo pipefail
+            bash_env_file="$(mktemp)"
+            BASH_ENV="${bash_env_file}" \
+              ORB_VAL_DEPLOY_DIR="$(mktemp -d)" \
+              ORB_VAL_TEST_RESULTS_DIR="$(mktemp -d)" \
+              ORB_VAL_EXTRA_ENV='DB_PASSWORD: $SECRET' \
+              ORB_VAL_SKIP_DEFAULT_MAPPING="true" \
+              bash src/scripts/map-env.sh
+            if ! grep -q '^export DB_PASSWORD=' "${bash_env_file}"; then
+              echo "FAIL: expected DB_PASSWORD to be exported, got:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            # MALICIOUS_INJECTED_VAR legitimately appears as a SUBSTRING of DB_PASSWORD's own
+            # (correctly %q-escaped, single-line) exported value below -- that's the fix
+            # working, not the bug. The bug this guards against is MALICIOUS_INJECTED_VAR
+            # becoming its OWN separate "export" line, so check for that specifically.
+            if grep -q '^export MALICIOUS_INJECTED_VAR=' "${bash_env_file}"; then
+              echo "FAIL: MALICIOUS_INJECTED_VAR leaked into \$BASH_ENV as its own export -- the secret's embedded newline smuggled in a second env var:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            echo "OK: only DB_PASSWORD was exported; the secret's embedded newline did not smuggle in a second env var."
+
+  # Regression tests for shell-correctness review Findings #4 and #5.
+  test-install-regressions:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: 'Finding #4 - a bin-dir containing a double-quote does not inject a command into $BASH_ENV'
+          command: |
+            set -euo pipefail
+            bin_dir='/tmp/bitrise-orb-hostile-bindir"; touch /tmp/BASH_ENV_PWNED; a="'
+            mkdir -p "${bin_dir}"
+            # Pre-populate fake, already-"installed" tools so this narrow test exercises only
+            # the \$BASH_ENV-escaping line at the end of install.sh, with zero real downloads.
+            printf '#!/bin/sh\necho "bitrise version 2.41.0"\n' >"${bin_dir}/bitrise"
+            printf '#!/bin/sh\necho "4.44.3"\n' >"${bin_dir}/yq"
+            chmod +x "${bin_dir}/bitrise" "${bin_dir}/yq"
+            echo "2.41.0" >/tmp/.bitrise-orb-version
+            rm -f /tmp/BASH_ENV_PWNED
+
+            bash_env_file="$(mktemp)"
+            BASH_ENV="${bash_env_file}" \
+              ORB_VAL_BITRISE_VERSION="2.41.0" \
+              ORB_VAL_BIN_DIR="${bin_dir}" \
+              bash src/scripts/install.sh
+
+            if [ -f /tmp/BASH_ENV_PWNED ]; then
+              echo "FAIL: /tmp/BASH_ENV_PWNED was created -- the hostile bin-dir injected a command into \$BASH_ENV" >&2
+              exit 1
+            fi
+            path_export_lines="$(grep -c '^export PATH=' "${bash_env_file}")"
+            if [ "${path_export_lines}" -ne 1 ]; then
+              echo "FAIL: expected exactly 1 'export PATH=' line in \$BASH_ENV, got ${path_export_lines} -- the hostile bin-dir broke out of its own line:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            # Sourcing the generated $BASH_ENV must be inert (no command execution beyond the
+            # PATH export itself) -- proves the escaping is safe to actually source, not just
+            # syntactically single-line.
+            ( set -e; source "${bash_env_file}" )
+            echo "OK: the hostile bin-dir was properly escaped; \$BASH_ENV contains exactly one safe PATH export."
+      - run:
+          name: "Finding #5 - version comparison is exact-match, not substring"
+          command: |
+            set -euo pipefail
+            # Case A: a substring collision ("2.41.0" inside "12.41.0") must NOT be treated
+            # as a cache hit -- the installed-version check must compare the full string.
+            # 2.41.0 is a real released version (needed because this case genuinely
+            # triggers a cache-miss download) -- see bitrise-io/bitrise's GitHub releases.
+            bin_dir_a="$(mktemp -d)"
+            printf '#!/bin/sh\necho "bitrise version 12.41.0"\n' >"${bin_dir_a}/bitrise"
+            chmod +x "${bin_dir_a}/bitrise"
+            echo "2.41.0" >/tmp/.bitrise-orb-version
+            output_a="$(BASH_ENV="$(mktemp)" ORB_VAL_BITRISE_VERSION="2.41.0" ORB_VAL_BIN_DIR="${bin_dir_a}" bash src/scripts/install.sh 2>&1)"
+            case "${output_a}" in
+              *"cache hit"*)
+                echo "FAIL: a substring collision ('2.41.0' inside '12.41.0') was incorrectly treated as a cache hit:" >&2
+                echo "${output_a}" >&2
+                exit 1
+                ;;
+            esac
+            case "${output_a}" in
+              *"Downloading Bitrise CLI v2.41.0"*) ;;
+              *)
+                echo "FAIL: expected install.sh to attempt a real download of v2.41.0 (correct cache-miss behavior), got:" >&2
+                echo "${output_a}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: a substring collision was correctly treated as a cache miss."
+
+            # Case B: an exact match IS a cache hit, and needs zero network calls.
+            bin_dir_b="$(mktemp -d)"
+            printf '#!/bin/sh\necho "bitrise version 2.41.0"\n' >"${bin_dir_b}/bitrise"
+            printf '#!/bin/sh\necho "4.44.3"\n' >"${bin_dir_b}/yq"
+            chmod +x "${bin_dir_b}/bitrise" "${bin_dir_b}/yq"
+            echo "2.41.0" >/tmp/.bitrise-orb-version
+            output_b="$(BASH_ENV="$(mktemp)" ORB_VAL_BITRISE_VERSION="2.41.0" ORB_VAL_BIN_DIR="${bin_dir_b}" bash src/scripts/install.sh 2>&1)"
+            case "${output_b}" in
+              *"already present"*"cache hit"*) ;;
+              *)
+                echo "FAIL: expected an exact version match to be treated as a cache hit, got:" >&2
+                echo "${output_b}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: an exact version match was correctly treated as a cache hit, with no download attempted."
+
+  # Gap-closing test: two chained bitrise/step calls in one job (the pattern
+  # chained_steps_one_job.yml documents) must keep their own outputs independent and
+  # uncorrupted, using skip-install/skip-map-env on the second call as the README/example
+  # recommend.
+  test-step-idempotency:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/step:
+          checkout: false
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              envman add --key SMOKE_OUT_1 --value first_call
+          extra-outputs: |
+            SMOKE_OUT_1
+      - bitrise/step:
+          checkout: false
+          skip-install: true
+          skip-map-env: true
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              envman add --key SMOKE_OUT_2 --value second_call
+          extra-outputs: |
+            SMOKE_OUT_2
+      - run:
+          name: Verify both chained calls' outputs are present and uncorrupted
+          command: |
+            if [ "${SMOKE_OUT_1:-}" != "first_call" ]; then
+              echo "FAIL: expected SMOKE_OUT_1=first_call, got '${SMOKE_OUT_1:-<unset>}'" >&2
+              exit 1
+            fi
+            if [ "${SMOKE_OUT_2:-}" != "second_call" ]; then
+              echo "FAIL: expected SMOKE_OUT_2=second_call, got '${SMOKE_OUT_2:-<unset>}'" >&2
+              exit 1
+            fi
+            echo "OK: two chained bitrise/step calls in one job kept independent outputs, uncorrupted: SMOKE_OUT_1=${SMOKE_OUT_1} SMOKE_OUT_2=${SMOKE_OUT_2}"
+
+  # Gap-closing test: a failing Step must make the job fail through the real run-bitrise
+  # command (not just a script-level unit test of a fixture), mirroring the README's "No
+  # failure wrapping" claim (Locked Decision #5) -- no retries, no swallowed exit codes.
+  # NOTE, verified locally against the real bitrise CLI: `bitrise run` does NOT propagate
+  # a failed Step's own numeric exit code -- it always exits 1 on any Step failure
+  # (confirmed against bitrise CLI v2.42.2; there is no `bitrise run` flag to change
+  # this). So this test asserts "the job fails, loudly, with the Step's own output on the
+  # console" (what Locked Decision #5 and the README actually promise), not "exit code 3
+  # reaches the job unchanged" (which is not something the real bitrise CLI does, and
+  # this orb has no code that could make it do so).
+  test-step-failure-propagation:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/install
+      - bitrise/create-config:
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              echo "deliberately failing, marker: BITRISE_ORB_TEST_FAILURE_MARKER"
+              exit 3
+      - run:
+          name: Regression test - a failing Step makes the job fail, with its own output on the console
+          command: |
+            set +e
+            run_output="$(ORB_VAL_CONFIG_PATH=".bitrise-orb.generated.yml" ORB_VAL_WORKFLOW_NAME="orb-step" bash src/scripts/run-bitrise.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            echo "${run_output}"
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected the real 'bitrise run' invocation to fail (non-zero exit) when the Step exits 3, got 0" >&2
+              exit 1
+            fi
+            case "${run_output}" in
+              *"BITRISE_ORB_TEST_FAILURE_MARKER"*) ;;
+              *)
+                echo "FAIL: expected the failing Step's own console output to be visible, unmodified, in run-bitrise's output" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: the failing Step made the job fail (exit ${actual_exit}), with its own output on the console, unmodified -- no retries, no swallowed exit codes."
 
 workflows:
   test-deploy:
@@ -202,6 +513,24 @@ workflows:
           filters: *filters
           context: bitrise-orb-mobile-testing
 
+      - test-collect-outputs-hijack-regression:
+          filters: *filters
+
+      - test-create-config-yaml-injection-regression:
+          filters: *filters
+
+      - test-map-env-extra-env-injection-regression:
+          filters: *filters
+
+      - test-install-regressions:
+          filters: *filters
+
+      - test-step-idempotency:
+          filters: *filters
+
+      - test-step-failure-propagation:
+          filters: *filters
+
       - orb-tools/pack:
           filters: *filters
           requires:
@@ -212,6 +541,12 @@ workflows:
             - "Testing pre-steps checkout pattern (machine)"
             - test-certificate-and-profile-installer
             - test-sign-apk
+            - test-collect-outputs-hijack-regression
+            - test-create-config-yaml-injection-regression
+            - test-map-env-extra-env-injection-regression
+            - test-install-regressions
+            - test-step-idempotency
+            - test-step-failure-propagation
 
       - orb-tools/publish:
           name: "Publish Dev"
