@@ -1,0 +1,45 @@
+description: >
+  OPT-IN alternative to bitrise/machine for a Linux/Android Bitrise Step that wants
+  Bitrise's own preinstalled Android SDK/NDK/Ruby/Flutter toolchain instead of installing
+  tools itself. This is a `docker` executor, so -- unlike `machine`, which cannot take a
+  custom image at all -- it can point at an arbitrary vendor image.
+
+  CAUTION, checked directly against Quay's own tag metadata while authoring this orb:
+  the default image below is a Bitrise-published snapshot, not a live mirror of
+  bitrise.io's current hosted stack. Its most recently published tag is dated
+  2024-01-08, while bitrise.io's own hosted stacks have since moved to newer Ubuntu
+  generations with no public, pullable equivalent image. Verify the SDK/NDK/Ruby
+  versions actually inside the image match what your Step needs (`docker run --rm
+  <<parameters.image>> <tool> --version`) before relying on it -- do not assume it
+  tracks bitrise.io's live environment. amd64 only (no arm64 build exists, consistent
+  with the Bitrise CLI's own lack of a Linux arm64 release). 10+GB pull -- enable
+  docker_layer_caching (on by default below) and prefer bitrise/machine plus this orb's
+  own `install` command unless a Step's own tool requirements genuinely need what this
+  image carries.
+
+parameters:
+  image:
+    type: string
+    default: "quay.io/bitriseio/android-20.04:latest"
+    description: >
+      Bitrise's own Android/Linux Docker image. Pin an explicit, dated tag (not
+      "latest") for reproducibility once you've picked one -- check
+      https://quay.io/repository/bitriseio/android-20.04?tab=tags for what's actually
+      available before relying on this default long-term.
+  resource-class:
+    type: string
+    default: "large"
+    description: >
+      CircleCI resource class. This image is 10+ GB; a "medium" class's disk/network
+      budget can make first pulls slow. "large" is a safer starting point.
+  docker-layer-caching:
+    type: boolean
+    default: true
+    description: >
+      Strongly recommended given the image size -- amortizes the pull cost across
+      builds. The sibling bitrise/machine executor defaults this to false for the
+      opposite reason (nothing this orb pulls there is worth caching).
+
+docker:
+  - image: <<parameters.image>>
+resource_class: <<parameters.resource-class>>

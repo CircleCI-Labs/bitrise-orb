@@ -1,0 +1,37 @@
+description: >
+  A mixed-platform app migrating off Bitrise typically has one Workflow per platform on
+  a different Stack each. Translate that directly into two `bitrise/step` jobs in the
+  same workflow, each on the executor its own platform needs (`bitrise/machine` for
+  Android, `bitrise/macos` for iOS) -- not a single job guessing at one executor for
+  both. Neither job blocks the other; both run in parallel, same as two independent
+  Bitrise Workflows would.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  workflows:
+    mobile-release:
+      jobs:
+        - bitrise/step:
+            name: Sign Android APK
+            executor: bitrise/machine
+            context: android-signing
+            id: sign-apk@2
+            inputs: |
+              android_app: app/build/outputs/apk/release/app-release-unsigned.apk
+              keystore_url: $ANDROID_KEYSTORE_URL
+              keystore_password: $ANDROID_KEYSTORE_PASSWORD
+              keystore_alias: $ANDROID_KEYSTORE_ALIAS
+              private_key_password: $ANDROID_KEY_PASSWORD
+        - bitrise/step:
+            name: Archive Signed iOS App
+            executor: bitrise/macos
+            context: ios-signing
+            id: xcode-archive@6
+            inputs: |
+              project_path: MyApp.xcworkspace
+              scheme: MyApp
+              distribution_method: app-store
+        # Each job keeps its own executor's default store-artifacts/store-test-results
+        # -- no cross-job coordination needed; they never share a machine.

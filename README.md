@@ -33,6 +33,28 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 - [CircleCI Orbs documentation](https://circleci.com/docs/orbs/introduction-to-orbs/)
 - [Bitrise Step Library](https://www.bitrise.io/integrations/steps) -- browse Steps and their inputs/outputs before referencing them here.
 
+## How it works
+
+A mental model, not a deep dive -- read this once before your first run, then treat the Quick start below as the thing you actually copy from.
+
+```mermaid
+flowchart TD
+    A[checkout] --> B["install<br/>bitrise CLI, pinned/latest<br/>cached by resolved version"]
+    B --> C["map-env<br/>CIRCLE_* -&gt; BITRISE_* into $BASH_ENV<br/>creates deploy-dir / test-results-dir"]
+    C --> D["create-config<br/>synthesize a throwaway bitrise.yml<br/>circleci env subst resolves $SECRETS here"]
+    D --> E["run-bitrise<br/>bitrise run -- the Step's own code executes<br/>no failure wrapping: its exit/stderr is the job's"]
+    E --> F["collect-outputs<br/>stepman step-info discovers declared outputs<br/>+ extra-outputs, exported into $BASH_ENV"]
+    F --> G[store_artifacts<br/>deploy-dir]
+    F --> H[store_test_results<br/>test-results-dir]
+
+    style C fill:#4a4a8a,color:#fff
+    style D fill:#4a4a8a,color:#fff
+```
+
+**The one non-obvious ordering decision:** `map-env` runs *before* `create-config`, not after. `create-config` resolves `$MY_SECRET`-style references inside your `inputs`/`outputs` blocks via `circleci env subst` at the moment it authors the synthesized `bitrise.yml` -- a plain substitution against whatever is in the process environment *right then*, not a deferred runtime lookup inside Bitrise. Since `map-env` is what actually exports `$BITRISE_DEPLOY_DIR`, `$BITRISE_SOURCE_DIR`, etc., an input like `output_path: $BITRISE_DEPLOY_DIR/app.ipa` only resolves correctly if `map-env` has already run. Both stages are independently skippable (`skip-install`/`skip-map-env`) so a hand-rolled job chaining several Bitrise Steps can reuse an already-installed CLI or an already-applied mapping -- see "Chaining two Bitrise Steps" below -- but if you skip `map-env` outright, you're on your own for anything that depends on it.
+
+Everything downstream of `run-bitrise` is this orb's own bookkeeping, not Bitrise's: `collect-outputs` never touches the Step's actual behavior, and the two `store_*` steps are just this orb calling CircleCI's own native primitives against directories it created itself.
+
 ## Quick start
 
 If your Bitrise workflow's signing Step shows up with **empty inputs** in an exported `bitrise.yml` (`certificate-and-profile-installer@1: {}`, no `certificate_url` at all), that's expected: on Bitrise, those values live in your Bitrise app's **Code Signing** settings page in the bitrise.io web UI, not in the YAML, and get injected at build time. That page is what you're actually copying `certificate_url`/`certificate_passphrase` out of below.
@@ -166,6 +188,12 @@ If you're migrating an existing Bitrise workflow, the fastest way to translate i
 | `ubuntu-jammy-22.04-bitrise-*` / `ubuntu-noble-24.04-bitrise-*` (Bitrise's newer yearly-edition Linux stack naming) | `bitrise/machine` |
 
 This table is a migration aid for humans reading their old Stack setting, not something this orb parses -- always cross-check against what the specific Step actually needs (its `type_tags`/`project_type_tags`, or just whether it shells out to `xcodebuild`/`security`).
+
+### A third, opt-in executor: `bitrise/android-toolchain`
+
+`bitrise/machine` installs whatever a Step needs itself (this orb's own `install` command handles the Bitrise CLI; anything an Android Step needs beyond that -- an SDK, an NDK, a specific Ruby -- is on you, same as it would be on a bare Bitrise Linux stack without the toolchain preinstalled). If you'd rather start from Bitrise's own published Android/Linux image instead, `bitrise/android-toolchain` is a `docker` executor defaulting to `quay.io/bitriseio/android-20.04:latest`.
+
+**Use this only if you know why:** it's a 10+GB image, amd64-only, and -- verified directly against Quay's tag metadata while building this orb -- a snapshot last published 2024-01-08, not a live mirror of bitrise.io's current hosted stack. Check the tools actually inside it before trusting it (see the executor's own description). For most Steps, `bitrise/machine` plus this orb's own installs is the safer default; reach for this one specifically when a Step assumes a real Android toolchain is already on `PATH` and you've confirmed this image's versions are close enough to what you need.
 
 ## The environment variable mapping
 

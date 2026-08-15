@@ -1,0 +1,28 @@
+description: >
+  OPT-IN alternative to bitrise/machine for an Android Step that assumes a real Android
+  SDK/NDK/Ruby toolchain is already on PATH, using Bitrise's own published
+  quay.io/bitriseio/android-20.04 image instead of installing tools yourself. Read the
+  bitrise/android-toolchain executor's own description and this orb's README
+  ("Choosing an executor") before reaching for this -- the image is 10+GB, amd64-only,
+  and (verified against Quay's own tag metadata) a dated snapshot, not a live mirror of
+  bitrise.io's current hosted stack.
+
+usage:
+  version: 2.1
+  orbs:
+    bitrise: cci-labs/bitrise@1.0.0
+  workflows:
+    android-release:
+      jobs:
+        - bitrise/step:
+            name: Build Android App (Bitrise's own Android toolchain image)
+            executor:
+              name: bitrise/android-toolchain
+              # Pin a real, dated tag once you've picked one -- see the executor's own
+              # description for how to find what's actually published.
+              docker-layer-caching: true
+            context: android-signing
+            id: android-build@1
+            inputs: |
+              module: app
+              variant: release

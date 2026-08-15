@@ -517,6 +517,28 @@ workflows:
                 command: echo "written by pre-steps" > ./pre-steps-marker.txt
           filters: *filters
 
+      # Proves the bitrise/android-toolchain executor's own mechanism (image/
+      # resource-class/docker-layer-caching parameters actually reach the docker
+      # executor) WITHOUT pulling the real 10+GB quay.io/bitriseio/android-20.04
+      # default on every single CI run forever -- the "image" override below swaps in
+      # a tiny image specifically to keep this cheap. The real default image is
+      # documented (README "Choosing an executor", the executor's own description) but
+      # deliberately not smoke-tested here; see those docs for why it isn't safe to
+      # rely on as a default in the first place.
+      - bitrise/step:
+          name: "Testing android-toolchain executor (small image override, mechanism only)"
+          executor:
+            name: bitrise/android-toolchain
+            image: cimg/base:current
+            resource-class: medium
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              echo "hello from the android-toolchain executor mechanism (image overridden for a cheap CI test)"
+          filters: *filters
+
       - test-certificate-and-profile-installer:
           filters: *filters
           context: bitrise-orb-mobile-testing
@@ -551,6 +573,7 @@ workflows:
             - "Testing extra-outputs (script@1 + envman add, machine)"
             - "Testing smart defaults (store-artifacts/store-test-results, machine)"
             - "Testing pre-steps checkout pattern (machine)"
+            - "Testing android-toolchain executor (small image override, mechanism only)"
             - test-certificate-and-profile-installer
             - test-sign-apk
             - test-collect-outputs-hijack-regression
