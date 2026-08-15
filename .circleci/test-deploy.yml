@@ -41,6 +41,161 @@ release-filters: &release-filters
     only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
 
 jobs:
+  # Functional test for the init-stack command (the headline "stack bootstrap" feature):
+  # profile "none" (the always-on zstd fix only), profile "js-mobile" (a real,
+  # checksum-verified Node.js download on linux-x86_64), and the ad hoc `tools` catalog
+  # (ripgrep, gh), all three composed in one job since none of them need credentials.
+  test-init-stack-machine:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/init-stack:
+          profile: none
+      - run:
+          name: Verify install-zstd (default true) installed zstd even with profile=none
+          command: |
+            set -euo pipefail
+            command -v zstd
+            zstd --version
+      - bitrise/init-stack:
+          profile: js-mobile
+          install-zstd: false
+      - run:
+          name: Verify Node.js (linux-x86_64) + npm + corepack after the js-mobile profile
+          command: |
+            set -euo pipefail
+            got="$(node --version)"
+            if [ "${got}" != "v22.22.0" ]; then
+              echo "FAIL: expected node --version 'v22.22.0', got '${got}'" >&2
+              exit 1
+            fi
+            npm --version
+            corepack --version
+            echo "OK: node ${got}"
+      - bitrise/init-stack:
+          profile: none
+          install-zstd: false
+          tools: "ripgrep,gh"
+      - run:
+          name: Verify the 'tools' catalog (ripgrep, gh) installed at their pinned versions
+          command: |
+            set -euo pipefail
+            rg --version | head -1
+            gh --version | head -1
+            echo "OK"
+
+  # Functional test for init-stack's "android-build" profile: OpenJDK (apt) + Android
+  # SDK platform-tools/one build-tools/one platform, via the checksum-verified cmdline-
+  # tools bootstrap zip. No credentials needed -- this only proves the toolchain
+  # installs and lands on PATH, not a real signed build.
+  test-init-stack-android-build:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/init-stack:
+          profile: android-build
+      - run:
+          name: Verify JDK + Android SDK (platform 35, build-tools 35.0.0) after the android-build profile
+          command: |
+            set -euo pipefail
+            java -version
+            adb --version
+            test -d "${ANDROID_HOME}/platforms/android-35"
+            test -d "${ANDROID_HOME}/build-tools/35.0.0"
+            echo "OK: ANDROID_HOME=${ANDROID_HOME}"
+
+  # Functional test for init-stack's "fastlane" profile: Ruby (apt) + the fastlane gem,
+  # pinned to fastlane-version's default.
+  test-init-stack-fastlane:
+    executor: bitrise/machine
+    steps:
+      - checkout
+      - bitrise/init-stack:
+          profile: fastlane
+      - run:
+          name: Verify Ruby + fastlane gem after the fastlane profile
+          command: |
+            set -euo pipefail
+            ruby --version
+            got="$(fastlane --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+            if [ "${got}" != "2.236.1" ]; then
+              echo "FAIL: expected fastlane 2.236.1, got '${got}'" >&2
+              exit 1
+            fi
+            echo "OK: fastlane ${got}"
+
+  # Limitations reassessment item #8 ("macOS path testing"): the ONLY job that runs on
+  # bitrise/macos in this repo used to be the credential-gated signing test, which
+  # self-skips whenever the context is empty -- so the macOS install/setup path was never
+  # exercised unconditionally. This job fixes that gap AND, since it's already paying for
+  # a macOS job, doubles as: a real checksum-verified js-mobile install on darwin-arm64
+  # (a different (os, arch) pin than test-init-stack-machine's linux-x86_64 run), and a
+  # regression test that the android-build/fastlane profiles refuse to run here at all,
+  # loudly, rather than silently attempting an apt-get that doesn't exist on macOS.
+  test-macos-smoke:
+    executor: bitrise/macos
+    steps:
+      - checkout
+      - bitrise/install
+      - bitrise/step:
+          checkout: false
+          id: script@1
+          inputs: |
+            content: |-
+              #!/usr/bin/env bash
+              set -e
+              echo "hello from bitrise on macOS (unconditional smoke test -- no signing credentials needed)"
+      - bitrise/init-stack:
+          profile: js-mobile
+      - run:
+          name: Verify Node.js (darwin-arm64) after the js-mobile profile
+          command: |
+            set -euo pipefail
+            got="$(node --version)"
+            if [ "${got}" != "v22.22.0" ]; then
+              echo "FAIL: expected node --version 'v22.22.0', got '${got}'" >&2
+              exit 1
+            fi
+            npm --version
+            echo "OK: node ${got} on darwin-arm64"
+      - run:
+          name: Regression - android-build and fastlane profiles refuse to run on macOS, loudly
+          command: |
+            set -euo pipefail
+            common_env=(
+              ORB_VAL_INSTALL_ZSTD=false
+              ORB_VAL_VERIFY_CHECKSUMS=true
+              ORB_VAL_JDK_VERSION=17
+              ORB_VAL_ANDROID_PLATFORM=35
+              ORB_VAL_ANDROID_BUILD_TOOLS=35.0.0
+              ORB_VAL_ANDROID_SDK_ROOT=/tmp/test-android-sdk
+              ORB_VAL_FASTLANE_VERSION=2.236.1
+              ORB_VAL_GEM_HOME=/tmp/test-gem-home
+              ORB_VAL_NODE_VERSION=22.22.0
+              ORB_VAL_NODE_ROOT=/tmp/test-node-root
+              ORB_VAL_STACK_BIN_DIR=/tmp/test-stack-bin
+            )
+            for profile in android-build fastlane; do
+              set +e
+              output="$(env "${common_env[@]}" ORB_VAL_PROFILE="${profile}" bash src/scripts/install-stack.sh 2>&1)"
+              actual_exit=$?
+              set -e
+              if [ "${actual_exit}" -eq 0 ]; then
+                echo "FAIL: expected the '${profile}' profile to refuse to run on macOS, but it exited 0" >&2
+                echo "${output}" >&2
+                exit 1
+              fi
+              case "${output}" in
+                *"cannot run here"*) ;;
+                *)
+                  echo "FAIL: expected a 'cannot run here' message for '${profile}' on macOS, got:" >&2
+                  echo "${output}" >&2
+                  exit 1
+                  ;;
+              esac
+              echo "OK: '${profile}' refused to run on macOS with a clear message."
+            done
+
   # Tier 1 target, gated: certificate-and-profile-installer needs a real (or throwaway)
   # .p12 certificate + .mobileprovision profile to do anything meaningful. No such
   # fixture exists in this sandboxed authoring pass (Rule: "do not invent... mark
@@ -317,6 +472,257 @@ jobs:
             esac
             echo "OK: an exact version match was correctly treated as a cache hit, with no download attempted."
 
+  # Regression tests for the security-review fixes that land in bitrise-orb, grouped in
+  # one job (same convention as test-install-regressions above, which already groups
+  # Findings #4 and #5): #2 (CRITICAL, collect-outputs.sh reserved-shell-var denylist),
+  # #3 (HIGH, create-config.sh/collect-outputs.sh no longer dump resolved secrets by
+  # default), #8 (MEDIUM, install.sh/install-stack.sh checksum verification), #10 (LOW,
+  # map-env.sh extra-env denylist parity) -- plus init-stack's own "unknown tool/version
+  # fails loudly" guard.
+  test-security-fixes-regressions:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "Finding #2 (CRITICAL) - collect-outputs.sh refuses 'extra-outputs: PATH' (reserved-shell-var hijack)"
+          command: |
+            set -euo pipefail
+            touch /tmp/f2-dummy-config.yml
+            set +e
+            error_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_EXTRA_OUTPUTS='PATH' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f2-dummy-config.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              bash src/scripts/collect-outputs.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected collect-outputs.sh to refuse 'extra-outputs: PATH', but it exited 0" >&2
+              echo "${error_output}" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"reserved shell variable"*) ;;
+              *)
+                echo "FAIL: expected a 'reserved shell variable' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: 'extra-outputs: PATH' was refused before ever reaching a real export -- the same check also guards a Step's DECLARED outputs, since both feed the identical OUTPUT_KEYS loop."
+      - run:
+          name: "Finding #3 (HIGH) - create-config.sh does not print resolved secrets by default, but does when debug-dump-config is explicitly true"
+          environment:
+            FAKE_SECRET_F3: "s3cr3t-should-not-appear-by-default"
+          command: |
+            set -euo pipefail
+            default_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_INPUTS='content: $FAKE_SECRET_F3' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f3-config.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              bash src/scripts/create-config.sh 2>&1)"
+            case "${default_output}" in
+              *"s3cr3t-should-not-appear-by-default"*)
+                echo "FAIL: the resolved secret appeared in create-config.sh's own console output with debug-dump-config unset (default)." >&2
+                exit 1
+                ;;
+            esac
+            grep -q "s3cr3t-should-not-appear-by-default" /tmp/f3-config.yml # still correctly WRITTEN to the file -- this is about console output only
+
+            debug_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_INPUTS='content: $FAKE_SECRET_F3' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f3-config-2.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              ORB_VAL_DEBUG_DUMP_CONFIG='true' \
+              bash src/scripts/create-config.sh 2>&1)"
+            case "${debug_output}" in
+              *"s3cr3t-should-not-appear-by-default"*) ;;
+              *)
+                echo "FAIL: expected the secret to appear when debug-dump-config=true (the opt-in dump), but it did not -- the toggle isn't wired up." >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: create-config.sh's console dump is off by default, and on only when explicitly requested."
+      - run:
+          name: "Finding #3 (HIGH) - collect-outputs.sh does not print the resolved config by default, but does when debug-dump-config is explicitly true"
+          environment:
+            FAKE_SECRET_F3B: "s3cr3t-should-not-appear-in-collect-outputs-by-default"
+          command: |
+            set -euo pipefail
+            ORB_VAL_ID='script@1' \
+              ORB_VAL_INPUTS='content: $FAKE_SECRET_F3B' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f3b-config.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              bash src/scripts/create-config.sh > /dev/null
+
+            # EXTRA_OUTPUTS carries a dummy key so OUTPUT_KEYS is non-empty -- with zero
+            # output keys, collect-outputs.sh exits early ("nothing to export") before
+            # ever reaching the append/dump code this test is exercising.
+            default_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_EXTRA_OUTPUTS='SOME_DUMMY_KEY' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f3b-config.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              bash src/scripts/collect-outputs.sh 2>&1)"
+            case "${default_output}" in
+              *"s3cr3t-should-not-appear-in-collect-outputs-by-default"*)
+                echo "FAIL: the resolved secret appeared in collect-outputs.sh's own console output with debug-dump-config unset (default)." >&2
+                exit 1
+                ;;
+            esac
+
+            debug_output="$(ORB_VAL_ID='script@1' \
+              ORB_VAL_OUTPUTS='' \
+              ORB_VAL_EXTRA_OUTPUTS='SOME_DUMMY_KEY' \
+              ORB_VAL_STEP_LIB_SOURCE='https://github.com/bitrise-io/bitrise-steplib.git' \
+              ORB_VAL_CONFIG_PATH='/tmp/f3b-config.yml' \
+              ORB_VAL_WORKFLOW_NAME='orb-step' \
+              ORB_VAL_DEBUG_DUMP_CONFIG='true' \
+              bash src/scripts/collect-outputs.sh 2>&1)"
+            case "${debug_output}" in
+              *"s3cr3t-should-not-appear-in-collect-outputs-by-default"*) ;;
+              *)
+                echo "FAIL: expected the secret to appear when debug-dump-config=true, but it did not -- the toggle isn't wired up." >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: collect-outputs.sh's console dump is off by default, and on only when explicitly requested."
+      - run:
+          name: "Finding #8 (MEDIUM) - checksum verification (install.sh, install-stack.sh) accepts a correct checksum and fails closed on a mismatch"
+          command: |
+            set -euo pipefail
+            # Extract the EXACT real helper functions from the shipped scripts (not a
+            # reimplementation) and exercise them directly -- this tests the real
+            # production code path, not a copy of its logic.
+            sed -n '/^orb_bool_is_true()/,/^}/p; /^verify_sha256()/,/^}/p' src/scripts/install.sh > /tmp/extracted-install.sh
+            # shellcheck source=/dev/null
+            source /tmp/extracted-install.sh
+            echo "hello from install.sh's verify_sha256 test" > /tmp/real-file-a.txt
+            real_sha256_a="$(sha256sum /tmp/real-file-a.txt | awk '{print $1}')"
+            verify_sha256 /tmp/real-file-a.txt "${real_sha256_a}" "correct-checksum case"
+            test -f /tmp/real-file-a.txt # correct checksum: file is left in place
+
+            set +e
+            bad_output="$(verify_sha256 /tmp/real-file-a.txt "0000000000000000000000000000000000000000000000000000000000000000" "mismatched-checksum case" 2>&1)"
+            bad_exit=$?
+            set -e
+            if [ "${bad_exit}" -eq 0 ]; then
+              echo "FAIL: verify_sha256 accepted a mismatched checksum" >&2
+              exit 1
+            fi
+            case "${bad_output}" in
+              *"checksum mismatch"*) ;;
+              *) echo "FAIL: expected a checksum mismatch message, got: ${bad_output}" >&2; exit 1 ;;
+            esac
+            if [ -f /tmp/real-file-a.txt ]; then
+              echo "FAIL: verify_sha256 left the mismatched file in place instead of removing it" >&2
+              exit 1
+            fi
+            echo "OK: install.sh's verify_sha256 accepts a correct checksum and fails closed (removes the file) on a mismatch."
+
+            sed -n '/^orb_bool_is_true()/,/^}/p; /^download_and_verify()/,/^}/p' src/scripts/install-stack.sh > /tmp/extracted-stack.sh
+            # shellcheck source=/dev/null
+            source /tmp/extracted-stack.sh
+            # A tiny, immutable (tag-pinned) real file -- exercises download_and_verify's
+            # own real `curl`, not a stub, without depending on this orb's own releases.
+            real_url="https://raw.githubusercontent.com/mikefarah/yq/v4.44.3/LICENSE"
+            real_sha256_b="697db34dabb21562fe84487a2ccd031fbd45382b89c2cbdec8ef31682c486040"
+            ORB_VAL_VERIFY_CHECKSUMS=true download_and_verify "${real_url}" /tmp/dl-target-b.txt "${real_sha256_b}" sha256 "correct-checksum case"
+            test -f /tmp/dl-target-b.txt
+
+            bogus_sha="0000000000000000000000000000000000000000000000000000000000000000"
+            set +e
+            bad_output_b="$(ORB_VAL_VERIFY_CHECKSUMS=true download_and_verify \
+              "${real_url}" /tmp/dl-target-b2.txt "${bogus_sha}" sha256 "mismatched-checksum case" 2>&1)"
+            bad_exit_b=$?
+            set -e
+            if [ "${bad_exit_b}" -eq 0 ]; then
+              echo "FAIL: download_and_verify accepted a mismatched checksum" >&2
+              exit 1
+            fi
+            case "${bad_output_b}" in
+              *"checksum mismatch"*) ;;
+              *) echo "FAIL: expected a checksum mismatch message, got: ${bad_output_b}" >&2; exit 1 ;;
+            esac
+            if [ -f /tmp/dl-target-b2.txt ]; then
+              echo "FAIL: download_and_verify left the mismatched download in place instead of removing it" >&2
+              exit 1
+            fi
+            echo "OK: install-stack.sh's download_and_verify accepts a correct checksum and fails closed (removes the file) on a mismatch."
+      - run:
+          name: "Finding #10 (LOW) - map-env.sh refuses an extra-env entry naming a reserved shell variable"
+          command: |
+            set -euo pipefail
+            set +e
+            error_output="$(BASH_ENV="$(mktemp)" \
+              ORB_VAL_DEPLOY_DIR="$(mktemp -d)" \
+              ORB_VAL_TEST_RESULTS_DIR="$(mktemp -d)" \
+              ORB_VAL_EXTRA_ENV='PATH: /tmp/evil:$PATH' \
+              ORB_VAL_SKIP_DEFAULT_MAPPING="true" \
+              bash src/scripts/map-env.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected map-env.sh to refuse 'extra-env: PATH: ...', but it exited 0" >&2
+              echo "${error_output}" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"reserved shell variable"*) ;;
+              *) echo "FAIL: expected a 'reserved shell variable' error, got:" >&2; echo "${error_output}" >&2; exit 1 ;;
+            esac
+            echo "OK: 'extra-env: PATH: ...' was refused before ever reaching \$BASH_ENV."
+      - run:
+          name: "init-stack - an unrecognized/unsupported 'tools' entry fails loudly before any network call"
+          command: |
+            set -euo pipefail
+            common_env=(
+              ORB_VAL_PROFILE=none
+              ORB_VAL_INSTALL_ZSTD=true
+              ORB_VAL_JDK_VERSION=17
+              ORB_VAL_ANDROID_PLATFORM=35
+              ORB_VAL_ANDROID_BUILD_TOOLS=35.0.0
+              ORB_VAL_NODE_VERSION=22.22.0
+              ORB_VAL_FASTLANE_VERSION=2.236.1
+            )
+            set +e
+            error_output="$(env "${common_env[@]}" ORB_VAL_TOOLS='totally-not-a-real-tool@1.0.0' bash src/scripts/resolve-stack-plan.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected resolve-stack-plan.sh to refuse an unknown tool, but it exited 0" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"unknown 'tools' entry"*) ;;
+              *) echo "FAIL: expected an 'unknown tools entry' error, got:" >&2; echo "${error_output}" >&2; exit 1 ;;
+            esac
+            echo "OK: an unrecognized tools entry was refused before any network call."
+
+            set +e
+            error_output_2="$(env "${common_env[@]}" ORB_VAL_TOOLS='ripgrep@0.0.1' bash src/scripts/resolve-stack-plan.sh 2>&1)"
+            actual_exit_2=$?
+            set -e
+            if [ "${actual_exit_2}" -eq 0 ]; then
+              echo "FAIL: expected resolve-stack-plan.sh to refuse ripgrep@0.0.1 (not the pinned version), but it exited 0" >&2
+              exit 1
+            fi
+            case "${error_output_2}" in
+              *"unsupported version"*) ;;
+              *) echo "FAIL: expected an 'unsupported version' error, got:" >&2; echo "${error_output_2}" >&2; exit 1 ;;
+            esac
+            echo "OK: a recognized tool name with an unsupported (unpinned) version was also refused."
+
   # Gap-closing test: two chained bitrise/step calls in one job (the pattern
   # chained_steps_one_job.yml documents) must keep their own outputs independent and
   # uncorrupted, using skip-install/skip-map-env on the second call as the README/example
@@ -559,10 +965,25 @@ workflows:
       - test-install-regressions:
           filters: *filters
 
+      - test-security-fixes-regressions:
+          filters: *filters
+
       - test-step-idempotency:
           filters: *filters
 
       - test-step-failure-propagation:
+          filters: *filters
+
+      - test-init-stack-machine:
+          filters: *filters
+
+      - test-init-stack-android-build:
+          filters: *filters
+
+      - test-init-stack-fastlane:
+          filters: *filters
+
+      - test-macos-smoke:
           filters: *filters
 
       - orb-tools/pack:
@@ -580,8 +1001,13 @@ workflows:
             - test-create-config-yaml-injection-regression
             - test-map-env-extra-env-injection-regression
             - test-install-regressions
+            - test-security-fixes-regressions
             - test-step-idempotency
             - test-step-failure-propagation
+            - test-init-stack-machine
+            - test-init-stack-android-build
+            - test-init-stack-fastlane
+            - test-macos-smoke
 
       - orb-tools/publish:
           name: "Publish Dev"
