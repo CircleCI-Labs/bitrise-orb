@@ -16,7 +16,19 @@ version: 2.1
 
 orbs:
   orb-tools: circleci/orb-tools@12.5.0
-  bitrise: {} # <- the just-packed dev orb is injected here at continuation time
+  # The just-packed dev orb is injected here at continuation time by
+  # orb-tools/continue's `yq '.orbs.[...] = load(...)'` substitution. Do NOT
+  # put a trailing end-of-line comment on the "bitrise:" line itself: yq
+  # (mikefarah/yq v4) does not reliably keep an EOL comment anchored to a key
+  # whose value is being replaced by a large loaded document -- it can
+  # relocate the comment onto the NEXT sibling key instead, and if that next
+  # key's value starts with a YAML anchor (as "filters: &filters" does right
+  # below), the anchor gets pushed onto its own unindented line and the
+  # continuation config fails to parse ("could not find expected ':'").
+  # Reproduced locally with the same invocation orb-tools/continue uses:
+  #   yq '.orbs.[env(NAME)] = load(env(SOURCE))' test-deploy.yml
+  # Keeping this comment on its own line, above the key, avoids the bug.
+  bitrise: {}
 
 filters: &filters
   tags:
