@@ -4,8 +4,6 @@ This orb runs a single **[Bitrise Step](https://docs.bitrise.io/en/bitrise-ci/re
 
 **Why:** Bitrise's StepLib has 400+ Steps, and a disproportionate number of the good ones are mobile-specific -- iOS code signing, Xcode archiving, fastlane, Android signing -- with no real CircleCI orb equivalent today. Teams migrating off Bitrise, or teams that just want to borrow one of those Steps, can run it as-is with this orb instead of reverse-engineering and rewriting it in shell.
 
-**Scope, honestly:** this orb runs **one Step**, not a whole `bitrise.yml` workflow. It is not a Bitrise-workflow importer or a Pipelines equivalent. Everything that would normally be a *separate* Bitrise Step in your old workflow -- checkout, caching, artifact upload -- has a native CircleCI equivalent already (`checkout`, `save_cache`/`restore_cache`, `store_artifacts`) and this orb expects you to keep using those directly rather than running Bitrise's own versions of them (see "What doesn't work" below).
-
 ---
 **Disclaimer:**
 
@@ -17,6 +15,10 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 
 ---
 
+## Scope: one Step per call, not a whole `bitrise.yml`
+
+This orb runs **one Step**, not a whole `bitrise.yml` workflow. It is not a Bitrise-workflow importer or a Pipelines equivalent. Everything that would normally be a *separate* Bitrise Step in your old workflow -- checkout, caching, artifact upload -- has a native CircleCI equivalent already (`checkout`, `save_cache`/`restore_cache`, `store_artifacts`) and this orb expects you to keep using those directly rather than running Bitrise's own versions of them (see "Limits" below).
+
 ## Features
 
 - Run any Bitrise Step by StepLib id (`xcode-archive@6`), by git URL (`git::https://github.com/bitrise-io/steps-script.git@1.1.3`), or by local path (`path::./my-step`) -- the full reference grammar, passed through verbatim.
@@ -27,12 +29,6 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 - Two named executors (`bitrise/macos`, `bitrise/machine`) with **no default** -- see "Choosing an executor" below for why.
 - **Smart defaults: this orb owns its own lifecycle.** `store_artifacts` against `deploy-dir` and `store_test_results` against `test-results-dir` both run automatically, with zero config -- see "The environment variable mapping" below. Each is a boolean you can turn off if you'd rather do it yourself.
 
-## Resources
-
-- [cci-labs/bitrise on the CircleCI Orb Registry](https://circleci.com/developer/orbs/orb/cci-labs/bitrise) -- the auto-generated reference for every parameter this orb exposes, always up to date with the latest published version.
-- [CircleCI Orbs documentation](https://circleci.com/docs/orbs/introduction-to-orbs/)
-- [Bitrise Step Library](https://www.bitrise.io/integrations/steps) -- browse Steps and their inputs/outputs before referencing them here.
-
 ## How it works
 
 A mental model, not a deep dive -- read this once before your first run, then treat the Quick start below as the thing you actually copy from.
@@ -42,8 +38,8 @@ flowchart TD
     A[checkout] --> B["install<br/>bitrise CLI, pinned/latest<br/>cached by resolved version"]
     B --> C["map-env<br/>CIRCLE_* -&gt; BITRISE_* into $BASH_ENV<br/>creates deploy-dir / test-results-dir"]
     C --> D["create-config<br/>synthesize a throwaway bitrise.yml<br/>circleci env subst resolves $SECRETS here"]
-    D --> E["run-bitrise<br/>bitrise run -- the Step's own code executes<br/>no failure wrapping: its exit/stderr is the job's"]
-    E --> F["collect-outputs<br/>stepman step-info discovers declared outputs<br/>+ extra-outputs, exported into $BASH_ENV"]
+    D --> E["collect-outputs<br/>stepman step-info discovers declared outputs<br/>+ extra-outputs; APPENDS an envman step to<br/>the not-yet-executed config -- nothing runs yet"]
+    E --> F["run-bitrise<br/>bitrise run -- the Step's own code AND the<br/>appended envman step execute here<br/>no failure wrapping: the Step's exit/stderr is the job's"]
     F --> G[store_artifacts<br/>deploy-dir]
     F --> H[store_test_results<br/>test-results-dir]
 
@@ -51,9 +47,85 @@ flowchart TD
     style D fill:#4a4a8a,color:#fff
 ```
 
-**The one non-obvious ordering decision:** `map-env` runs *before* `create-config`, not after. `create-config` resolves `$MY_SECRET`-style references inside your `inputs`/`outputs` blocks via `circleci env subst` at the moment it authors the synthesized `bitrise.yml` -- a plain substitution against whatever is in the process environment *right then*, not a deferred runtime lookup inside Bitrise. Since `map-env` is what actually exports `$BITRISE_DEPLOY_DIR`, `$BITRISE_SOURCE_DIR`, etc., an input like `output_path: $BITRISE_DEPLOY_DIR/app.ipa` only resolves correctly if `map-env` has already run. Both stages are independently skippable (`skip-install`/`skip-map-env`) so a hand-rolled job chaining several Bitrise Steps can reuse an already-installed CLI or an already-applied mapping -- see "Chaining two Bitrise Steps" below -- but if you skip `map-env` outright, you're on your own for anything that depends on it.
+**A second non-obvious ordering decision, easy to get backwards:** `collect-outputs` runs *before* `run-bitrise`, not after. `collect-outputs` doesn't read anything at the point it runs -- nothing has executed yet -- it only *appends* an extra Step to the still-unexecuted synthesized `bitrise.yml` that will export the target Step's outputs once the workflow actually runs. `run-bitrise` is what executes the whole synthesized workflow, target Step and appended output-exporter alike, in one `bitrise run`. Both stages have to have already written into `config-path` before `run-bitrise` touches it.
+
+**The one non-obvious ordering decision that isn't about `run-bitrise`:** `map-env` runs *before* `create-config`, not after. `create-config` resolves `$MY_SECRET`-style references inside your `inputs`/`outputs` blocks via `circleci env subst` at the moment it authors the synthesized `bitrise.yml` -- a plain substitution against whatever is in the process environment *right then*, not a deferred runtime lookup inside Bitrise. Since `map-env` is what actually exports `$BITRISE_DEPLOY_DIR`, `$BITRISE_SOURCE_DIR`, etc., an input like `output_path: $BITRISE_DEPLOY_DIR/app.ipa` only resolves correctly if `map-env` has already run. Both stages are independently skippable (`skip-install`/`skip-map-env`) so a hand-rolled job chaining several Bitrise Steps can reuse an already-installed CLI or an already-applied mapping -- see "Chaining two Bitrise Steps" below -- but if you skip `map-env` outright, you're on your own for anything that depends on it.
 
 Everything downstream of `run-bitrise` is this orb's own bookkeeping, not Bitrise's: `collect-outputs` never touches the Step's actual behavior, and the two `store_*` steps are just this orb calling CircleCI's own native primitives against directories it created itself.
+
+## Mapping your existing config
+
+If you're migrating a real `bitrise.yml`, here's the same Step, side by side. This is Android
+signing exactly as it would appear inside a Bitrise workflow's `steps:` list -- Bitrise's own
+list-of-single-key-maps shape:
+
+```yaml
+# bitrise.yml (Bitrise)
+workflows:
+  primary:
+    steps:
+    - sign-apk@2:
+        inputs:
+        - android_app: app/build/outputs/apk/release/app-release-unsigned.apk
+        - keystore_url: $BITRISEIO_ANDROID_KEYSTORE_URL
+        - keystore_password: $BITRISEIO_ANDROID_KEYSTORE_PASSWORD
+        - keystore_alias: $BITRISEIO_ANDROID_KEYSTORE_ALIAS
+        - private_key_password: $BITRISEIO_ANDROID_KEY_PASSWORD
+```
+
+```yaml
+# .circleci/config.yml (this orb)
+version: 2.1
+orbs:
+  bitrise: cci-labs/bitrise@1.0.0
+workflows:
+  android-release:
+    jobs:
+      - bitrise/step:
+          executor: bitrise/machine
+          id: sign-apk@2
+          inputs: |
+            android_app: app/build/outputs/apk/release/app-release-unsigned.apk
+            keystore_url: $ANDROID_KEYSTORE_URL
+            keystore_password: $ANDROID_KEYSTORE_PASSWORD
+            keystore_alias: $ANDROID_KEYSTORE_ALIAS
+            private_key_password: $ANDROID_KEY_PASSWORD
+          context: android-signing
+```
+
+What actually changed, concept by concept:
+
+- **A Bitrise "Step" becomes a `bitrise/step` command (inline, among native steps) or job
+  (standalone, in a workflow's `jobs:` list)** -- there's no separate CircleCI vocabulary for
+  it; it's just this orb's one unit of work. The `<step-id>@<version>` reference (`sign-apk@2`)
+  passes through to the `id` parameter completely unchanged -- this orb does no version
+  resolution of its own, so anything that resolves for `bitrise run` locally resolves here too.
+- **Step `inputs` go from a list-of-single-key-maps to a flat `key: value` block.** This orb's
+  `create-config` command converts your flat block back into Bitrise's own list shape internally
+  when it synthesizes the throwaway `bitrise.yml` -- you're not fighting Bitrise's format, you're
+  just not required to type its extra list/map ceremony by hand.
+- **Where the vendor's env vars come from is the biggest mental shift.** On Bitrise,
+  `$BITRISEIO_ANDROID_KEYSTORE_URL` lives in your Bitrise app's **Secrets** or the Workflow
+  Editor's **Env Vars** tab in the bitrise.io web UI, injected at build time by Bitrise's own
+  backend -- it's not really "in" the `bitrise.yml` you're reading, even though the YAML
+  references it by name. On CircleCI there's no separate backend injecting anything: put the
+  real secret value in a CircleCI **context** or **project environment variable**, reference it
+  with a plain `$MY_VAR` inside `inputs:`, and this orb's `create-config` resolves it via
+  `circleci env subst` at the moment it writes the synthesized config -- the secret's value never
+  touches your committed `.circleci/config.yml`, same security property Bitrise's own Secrets
+  give you, different mechanism.
+- **What Bitrise's platform does for you that CircleCI does natively instead:** the Step's own
+  outputs (`$BITRISE_SIGNED_APK_PATH`) land in `$BASH_ENV` automatically (see "Outputs" below)
+  instead of Bitrise's `$BITRISE_DEPLOY_DIR`-plus-`deploy-to-bitrise-io` combo; this orb's
+  `store-artifacts`/`store-test-results` defaults are the direct equivalent, already wired up
+  with zero extra config (see "Environment variable mapping" below); and StepLib's own Step
+  caching (git-cloning each Step's code) has no equivalent to port, because this orb's
+  `install` command already caches the CLI + StepLib state that makes Step resolution fast on
+  repeat runs.
+- **What has no equivalent and needs a real decision on your part:** picking an executor.
+  Bitrise's own **Stack** setting picked the OS for you; this orb never guesses (see "Choosing
+  an executor" below) -- translate your old Stack name into `bitrise/macos` or `bitrise/machine`
+  explicitly.
 
 ## Quick start
 
@@ -291,7 +363,7 @@ Use `extra-outputs` to name it explicitly -- a newline-separated list of environ
 
 `extra-outputs` entries are exported verbatim under their own name only -- they're not eligible for Bitrise's config-level output aliasing (the `outputs` parameter), since that mechanism only knows about a Step's *declared* outputs.
 
-## What doesn't work
+## Limits
 
 A specific, identifiable slice of Bitrise Steps call back to bitrise.io's own hosted services with no substitution point -- these fail outside a real Bitrise build not because the CLI blocks them, but because *that Step's own code* calls a bitrise.io endpoint this orb has no account behind. Re-implement these against CircleCI's native equivalents instead of running the Bitrise Step:
 
@@ -312,6 +384,102 @@ By contrast, **iOS/Android code signing itself is not a hard blocker**: `xcode-a
 - **`bitrise run` auto-loads a file literally named `.bitrise.secrets.yml` from the working directory, with no flag needed.** If your repo happens to contain one, its values get silently picked up. This orb doesn't delete or otherwise touch that file -- it's a Bitrise CLI behavior, not this orb's.
 - **This orb passes every Step input through verbatim and does not validate it (by design -- see "No failure wrapping" above).** A typo in an input name won't be caught by this orb; the Step's own error message is what you'll see, exactly as if you'd run `bitrise run` locally. It'll appear after a fair amount of orb-plumbing output (CLI install, cache restore, `bitrise setup`) -- look for the "Running Bitrise Step" step's own output specifically.
 - **Bitrise's Go-toolkit Steps are compiled from source on first use per machine/version**, not shipped as prebuilt binaries -- expect the first run of a new Step+version to take a few seconds longer than subsequent cached runs.
+
+## Legal / compliance
+
+This orb implements Step execution purely by installing and shelling out to Bitrise's own
+MIT-licensed [`bitrise` CLI](https://github.com/bitrise-io/bitrise) locally, exactly as
+`bitrise setup && bitrise run` would behave for any user -- it does not read, copy, or fork
+that CLI's source, and it never contacts bitrise.io's own backend (no account, no API token,
+no build-slug identity). Steps themselves are fetched from StepLib (or the git/local source you
+point `id` at) under whatever license that specific Step publishes -- check a Step's own
+`step.yml`/repository before relying on it in a context where that matters, the same diligence
+you'd apply running it directly with `bitrise run` yourself.
+
+## Commands and job reference
+
+| Name | Kind | What it does |
+|---|---|---|
+| `step` | command, job | The aggregate most users want: install -> map-env -> create-config -> collect-outputs -> run-bitrise -> store_artifacts/store_test_results, in order. |
+| `install` | command | Resolves and installs the Bitrise CLI, cached by resolved version. |
+| `map-env` | command | Exports the CircleCI -> Bitrise variable mapping into `$BASH_ENV`; creates `deploy-dir`/`test-results-dir`. |
+| `create-config` | command | Synthesizes the throwaway `bitrise.yml` for exactly one Step, resolving `$SECRET`-style references via `circleci env subst`. |
+| `collect-outputs` | command | Discovers the Step's declared outputs (`stepman step-info`) and appends an output-exporting Step to the not-yet-executed config. |
+| `run-bitrise` | command | `bitrise run`s the synthesized config -- the actual execution point for both the target Step and the appended output exporter. |
+
+**Reach for the granular commands instead of the `step` aggregate when:** you're chaining two or
+more Bitrise Steps that must share on-disk/keychain state in one job (see "Chaining two Bitrise
+Steps" above -- `skip-install`/`skip-map-env` on the later calls avoid redundant work), or when
+you want native CircleCI steps interleaved at a point finer than `pre-steps`/`post-steps` allow.
+
+### `step` (command and job) parameters
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `executor` *(job only)* | executor | *(required)* | `bitrise/macos` or `bitrise/machine` -- no default; see "Choosing an executor." |
+| `checkout` | boolean | `true` | Check out the project first. |
+| `id` | string | *(required)* | The Step reference (`<id>@<version>`, `git::<url>@<ref>`, or `path::<local-path>`). |
+| `inputs` | string | `""` | Flat `key: value` block of the Step's inputs; `$SECRET` resolved via `circleci env subst`. |
+| `outputs` | string | `""` | Flat `ORIGINAL_KEY: alias` block for Bitrise's own output-aliasing. Leave empty to export verbatim vendor names. |
+| `extra-outputs` | string | `""` | Newline-separated env var **names** to export in addition to the Step's declared outputs -- for Steps that call `envman add` without declaring an output in `step.yml`. |
+| `step-lib-source` | string | Bitrise's official StepLib URL | Where to resolve `id` against when it has no explicit source prefix. |
+| `bitrise-version` | string | `"latest"` | Bitrise CLI version to install. |
+| `bin-dir` | string | `/tmp/bitrise-orb/bin` | Install directory for the CLI + `yq`. |
+| `cache-key-prefix` | string | `"v1"` | Prefix on every cache key this orb writes; bump to force a clean cache. |
+| `deploy-dir` | string | `/tmp/bitrise-orb/deploy` | Exported as `$BITRISE_DEPLOY_DIR`; also what `store-artifacts` publishes. |
+| `store-artifacts` | boolean | `true` | Auto-run `store_artifacts` against `deploy-dir` after the Step. |
+| `test-results-dir` | string | `/tmp/bitrise-orb/test-results` | Exported as `$BITRISE_TEST_DEPLOY_DIR`; also what `store-test-results` publishes. |
+| `store-test-results` | boolean | `true` | Auto-run `store_test_results` against `test-results-dir` after the Step. |
+| `extra-env` | string | `""` | Extra/override `NAME: value` pairs, applied after the built-in mapping (these win). |
+| `skip-default-env-mapping` | boolean | `false` | Skip the built-in CircleCI -> Bitrise mapping entirely. |
+| `config-path` | string | `.bitrise-orb.generated.yml` | Where the synthesized `bitrise.yml` is written. |
+| `workflow-name` | string | `"orb-step"` | Name of the workflow inside the synthesized config. |
+| `skip-install` | boolean | `false` | Skip installing the CLI (an earlier call in this job already did). |
+| `skip-map-env` | boolean | `false` | Skip exporting the env mapping (an earlier call in this job already did). |
+| `skip-collect-outputs` | boolean | `false` | Skip discovering/exporting the Step's outputs. |
+
+Individual commands (`install`, `map-env`, `create-config`, `collect-outputs`, `run-bitrise`)
+expose the matching subset of these same parameters, under the same names -- see each command's
+own description on the [Orb Registry page](https://circleci.com/developer/orbs/orb/cci-labs/bitrise)
+for the exhaustive, always-current list.
+
+### Worked example: composing the granular commands by hand
+
+The same two chained Steps from "Chaining two Bitrise Steps" above, but built entirely from the
+individual commands instead of `step`, to show the exact order that has to hold (`map-env` before
+`create-config`; `collect-outputs` before `run-bitrise`):
+
+```yaml
+version: 2.1
+orbs:
+  bitrise: cci-labs/bitrise@1.0.0
+jobs:
+  build-signed-ios-app:
+    executor: bitrise/macos
+    steps:
+      - checkout
+      - bitrise/install
+      - bitrise/map-env
+      - bitrise/create-config:
+          id: certificate-and-profile-installer@1
+          inputs: |
+            certificate_url: $IOS_CERTIFICATE_URL
+            certificate_passphrase: $IOS_CERTIFICATE_PASSPHRASE
+      - bitrise/collect-outputs:
+          id: certificate-and-profile-installer@1
+      - bitrise/run-bitrise
+workflows:
+  ios-release:
+    jobs:
+      - build-signed-ios-app:
+          context: ios-signing
+```
+
+## Resources
+
+- [cci-labs/bitrise on the CircleCI Orb Registry](https://circleci.com/developer/orbs/orb/cci-labs/bitrise) -- the auto-generated reference for every parameter this orb exposes, always up to date with the latest published version.
+- [CircleCI Orbs documentation](https://circleci.com/docs/orbs/introduction-to-orbs/)
+- [Bitrise Step Library](https://www.bitrise.io/integrations/steps) -- browse Steps and their inputs/outputs before referencing them here.
 
 ## How to Contribute
 
