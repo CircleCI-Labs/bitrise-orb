@@ -82,6 +82,24 @@ apt_install() {
   ${sudo_cmd} apt-get install -y -qq "$@"
 }
 
+# macOS has no `sha256sum`/`sha1sum` by default (verified against a real CircleCI macOS
+# job -- not hypothetical) -- fall back to BSD `shasum`, which works on both without a
+# branch on `uname`.
+sha256_of() {
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+sha1_of() {
+  if command -v sha1sum > /dev/null 2>&1; then
+    sha1sum "$1" | awk '{print $1}'
+  else
+    shasum -a 1 "$1" | awk '{print $1}'
+  fi
+}
+
 # Download $1 to $2, then verify it against the expected checksum $3 using algorithm $4
 # ("sha256" or "sha1") before returning -- fails closed (removes the partial download and
 # exits non-zero) on any mismatch. $5 is a human label used only in messages.
@@ -94,8 +112,8 @@ download_and_verify() {
   if orb_bool_is_true "${ORB_VAL_VERIFY_CHECKSUMS:-1}"; then
     local actual=""
     case "${algo}" in
-      sha256) actual="$(sha256sum "${dest}" | awk '{print $1}')" ;;
-      sha1) actual="$(sha1sum "${dest}" | awk '{print $1}')" ;;
+      sha256) actual="$(sha256_of "${dest}")" ;;
+      sha1) actual="$(sha1_of "${dest}")" ;;
       *)
         echo "bitrise-orb: internal error -- unknown checksum algorithm '${algo}' for ${label}." >&2
         exit 1

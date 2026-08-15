@@ -31,6 +31,17 @@ orb_bool_is_true() {
   esac
 }
 
+# macOS has no `sha256sum` by default (verified against a real CircleCI macOS job --
+# this is not a hypothetical) -- fall back to BSD `shasum -a 256`, which Linux also
+# carries via perl's Digest::SHA, so this works on both without a branch on `uname`.
+sha256_of() {
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 verify_sha256() {
   # $1 = file, $2 = expected sha256, $3 = human label for messages
   local file="$1" expected="$2" label="$3" actual
@@ -38,7 +49,7 @@ verify_sha256() {
     echo "WARNING: verify-checksums is false -- skipping checksum verification for ${label}. Never disable this outside local debugging of this orb itself." >&2
     return 0
   fi
-  actual="$(sha256sum "${file}" | awk '{print $1}')"
+  actual="$(sha256_of "${file}")"
   if [[ "${actual}" != "${expected}" ]]; then
     echo "bitrise-orb: checksum mismatch for ${label} -- refusing to use this download." >&2
     echo "  expected: ${expected}" >&2
@@ -159,11 +170,16 @@ YQ_VERSION="v4.44.3"
 # rather than fetched per run -- update this table (and re-verify) whenever YQ_VERSION
 # is bumped.
 yq_expected_sha256() {
+  # Keyed by the FULL asset filename ("yq_<os>_<arch>", matching YQ_ASSET below) --
+  # verified locally that this matters: an earlier version of this table was keyed
+  # without the "yq_" prefix and silently never matched, which turned every "verified"
+  # install into a hard failure instead (fail-closed, but for the wrong reason -- caught
+  # by this orb's own real CI run, not by local testing on a mismatched (os, arch)).
   case "$1" in
-    linux_amd64) echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7" ;;
-    linux_arm64) echo "0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156" ;;
-    darwin_amd64) echo "216ddfa03e7ba0e5aba00b236ec78324b5bfc49b610db254fe92310878baea20" ;;
-    darwin_arm64) echo "559a594ef7a6ebc5b81a67b7717fb3accedd266d8fa7d8352da7fec9e463f48b" ;;
+    yq_linux_amd64) echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7" ;;
+    yq_linux_arm64) echo "0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156" ;;
+    yq_darwin_amd64) echo "216ddfa03e7ba0e5aba00b236ec78324b5bfc49b610db254fe92310878baea20" ;;
+    yq_darwin_arm64) echo "559a594ef7a6ebc5b81a67b7717fb3accedd266d8fa7d8352da7fec9e463f48b" ;;
     *) echo "" ;;
   esac
 }
