@@ -247,9 +247,23 @@ jobs:
           inputs: |
             certificate_url: file:///tmp/bitrise-orb-ios-test-cert.p12
             certificate_passphrase: testpass123
-            install_defaults: "no"
             keychain_path: /tmp/bitrise-orb-test.keychain-db
             keychain_password: testpass123
+          # install_defaults is deliberately OMITTED, not set to "no": this orb's
+          # create-config.sh preserves a quoted "no"/"yes"/"on"/"off" input value's YAML
+          # !!str TAG through its yq round-trip, but re-emits it unquoted -- so Bitrise's
+          # own (separate) YAML parser reads the synthesized bitrise.yml fresh and
+          # resolves the bare word as an actual YAML 1.1 boolean, silently changing the
+          # value bitrise.io hands the Step from "no" to the literal string "false"
+          # (confirmed against real CI: this exact job failed with "Issue with input
+          # InstallDefaults: invalid parameter: false, available: [yes no]" before this
+          # comment/fix landed). This is a real, orb-wide defect (any Step input whose
+          # value is literally "yes"/"no"/"on"/"off"/"y"/"n" is at risk, not just this
+          # one) -- flagged separately for a real fix in create-config.sh; this test
+          # works around it by relying on the Step's own default ("yes") instead of
+          # passing the value through this orb at all. That default is provably
+          # harmless here: main.go only acts on it when DefaultCertificateURL is also
+          # non-empty, which it never is in this job.
       - run:
           name: Verify the throwaway certificate was genuinely imported into the keychain (not merely exit 0)
           command: |
