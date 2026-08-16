@@ -286,7 +286,7 @@ This table is a migration aid for humans reading their old Stack setting, not so
 
 **Use this only if you know why:** it's a 10+GB image, amd64-only, and -- verified directly against Quay's tag metadata while building this orb -- a snapshot last published 2024-01-08, not a live mirror of bitrise.io's current hosted stack. Check the tools actually inside it before trusting it (see the executor's own description). For most Steps, `bitrise/machine` plus this orb's own `init-stack` command (below) is the safer default; reach for this one specifically when a Step assumes a real Android toolchain is already on `PATH` and you've confirmed this image's versions are close enough to what you need.
 
-**Caching the image, and what it costs:** `docker-layer-caching` (DLC) on this executor defaults to `true` for exactly this reason -- without it, every job pays this image's full 10+GB pull. DLC is a **paid, plan-gated CircleCI feature** (check your plan before relying on it) that caches at the Docker *layer* level, so a small upstream tag bump often only re-pulls the top layer instead of the whole image. Rule of thumb across this orb: leave DLC off (the `bitrise/machine` executor's own default) for anything under roughly 50MB -- a plain pull is already faster than the cache round-trip -- and turn it on for anything in this image's class. This is also why this orb doesn't hand-roll a `docker save`/`load` cache of its own: DLC already does that job, at a finer (per-layer) grain, for free once you're on a plan that includes it.
+**Caching the image, and what it costs:** `docker-layer-caching` (DLC) on this executor defaults to `true`, unlike `bitrise/machine`'s own default of `false` -- see [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Image caching economics" for why the two executors default differently.
 
 ## Stack bootstrap
 
@@ -309,7 +309,7 @@ flowchart LR
 
 Add ad hoc tools beyond a profile with `tools: "ripgrep,gh"` (or pin explicitly, `ripgrep@14.1.1`) -- names and versions are checked against this orb's own pinned catalog; anything else fails the step loudly rather than being silently skipped. `install-zstd` (default `true`) always runs regardless of `profile`, because `zstd` is a hard, confirmed dependency of current-generation Bitrise cache Steps (`restore-cache`/`save-cache` both declare it) -- nothing depending on it should silently break just because you didn't ask for a profile.
 
-**Why this, and not a bigger/smaller thing:** the research behind this command read Bitrise's own machine-readable stack manifest ([`bitrise-io/stacks`](https://github.com/bitrise-io/stacks), a JSON transcript refreshed continuously against real stack VMs -- the two pullable vendor images are years stale by comparison, see "A third, opt-in executor" above) and cross-referenced it against 20 real StepLib Steps' own declared dependencies and Go source. `zstd`, a JDK+Android-SDK slice, Ruby+fastlane, and Node.js are the only things any of those Steps actually call; ripgrep/gh/AWS CLI/gcloud/Nix/etc. all appear in Bitrise's tools inventory but zero sampled first-party Step declares or calls any of them -- they're supported only via the explicit `tools:` override, not installed by default, because "a tool nothing uses is not worth installing."
+**Why this, and not a bigger/smaller thing:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) item 1 -- the short version is that a 20-Step sample of real StepLib dependencies only ever called `zstd`, a JDK+Android-SDK slice, Ruby+fastlane, and Node.js; everything else in Bitrise's own stack tooling inventory is opt-in via `tools:` instead of default.
 
 **Integrity, per install path (deliberately not uniform):**
 
@@ -358,6 +358,19 @@ Because that last row's checksums are pinned to one exact version each, `node-ve
 Bitrise documents `$BITRISE_DEPLOY_DIR` and `$BITRISE_TEST_DEPLOY_DIR` as two **distinct** directories -- deploy artifacts vs. JUnit-XML test results -- so this orb creates and exports both separately, and defaults `store_test_results` at the test-results one specifically. Only certain Steps (`android-unit-test`, `xcode-test`, and similar) actually populate `$BITRISE_TEST_DEPLOY_DIR`; running an arbitrary third-party Step through this orb may deposit nothing there, which is a silent no-op for `store_test_results`, not a failure.
 
 Because the generated `store_artifacts`/`store_test_results` steps are templated from the exact same `deploy-dir`/`test-results-dir` orb parameters that get exported into `$BASH_ENV`, there's no path to type twice and no way for the two to drift apart -- override `deploy-dir` (or `test-results-dir`) once and both the export and the generated step move together. If you disable the defaults and write your own `store_artifacts`/`store_test_results` step instead, that step's own `path:` field still can't take a runtime environment-variable substitution (only a literal, compile-time-known path), so in that case only, you're back to typing the path yourself and keeping it in sync by hand.
+
+## Defaults that deviate from Bitrise's own CLI
+
+This orb intentionally overrides three of `bitrise run`'s own out-of-the-box behaviors. All three
+are overridable and every one is a real, current default -- not a defect -- but a user coming
+from a bare `bitrise run` or Bitrise's own published install instructions would be surprised by
+them if they weren't called out:
+
+| Parameter | Bitrise's own default | This orb's default | Why |
+|---|---|---|---|
+| `store-artifacts` | Off -- a workflow only publishes deploy artifacts if it explicitly includes Bitrise's own `deploy-to-bitrise-io` Step (see the "Doesn't work: Deploy to Bitrise.io" row in "Limits" above; that Step itself has no local-CLI equivalent at all). | `true` | This orb's `store_artifacts` against `deploy-dir` is the local-CLI-reachable substitute for `deploy-to-bitrise-io` -- see "The environment variable mapping" above. Publishing by default matches what most CI users expect from a build step that produces an installable artifact. |
+| `store-test-results` | Off -- same reasoning: nothing in a bare `bitrise run` publishes JUnit XML anywhere by default; only specific Steps (`android-unit-test`, `xcode-test`, ...) write `$BITRISE_TEST_DEPLOY_DIR` at all, and nothing reads it back without an explicit Step. | `true` | Same rationale as `store-artifacts` -- see above. A Step that never populates `$BITRISE_TEST_DEPLOY_DIR` makes this a silent no-op, not a failure, so defaulting it on costs nothing when it doesn't apply. |
+| `verify-checksums` | Off -- Bitrise's own published install instructions (`github.com/bitrise-io/bitrise`, and its Homebrew formula) fetch the release binary directly with no checksum-verification step of their own. | `true` | This orb downloads and executes the Bitrise CLI and `yq` on every job; verifying the checksum before running either is a stricter, safer default than the vendor's own install path, and costs one hash comparison per cold cache. |
 
 ## Interleaving native CircleCI steps around the Bitrise Step
 
@@ -452,7 +465,7 @@ Use `extra-outputs` to name it explicitly -- a newline-separated list of environ
   - attach_workspace: { at: /tmp/workspace }
   - run: export IPA_PATH="$(cat /tmp/workspace/ipa-path.txt)"
   ```
-- **Branching which jobs RUN, based on an upstream job's output** (a genuinely harder ask -- conditional workflow logic driven by runtime data): CircleCI has no native construct for this. The closest real mechanism is a setup workflow plus the `circleci/continuation` orb, where an early job computes a value and calls `continuation/continue` with a config whose `workflows:` block is shaped by that value. There is no simpler answer available today; don't expect a lighter-weight substitute.
+- **Branching which jobs RUN, based on an upstream job's output** (a genuinely harder ask -- conditional workflow logic driven by runtime data): CircleCI has no native construct for this. The closest real mechanism is a setup workflow plus the `circleci/continuation` orb, where an early job computes a value and calls `continuation/continue` with a config whose `workflows:` block is shaped by that value. There is no simpler answer available today; don't expect a lighter-weight substitute -- see [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Workspace / parallelism fit" for why this wasn't built as an orb feature.
 
 ## Limits
 
@@ -603,7 +616,7 @@ workflows:
 
 ## How to Contribute
 
-Bug reports and feature requests are welcome via [Issues](https://github.com/CircleCI-Labs/bitrise-orb/issues). Pull requests are welcome via the usual GitHub flow.
+Bug reports and feature requests are welcome via [Issues](https://github.com/CircleCI-Labs/bitrise-orb/issues). Pull requests are welcome via the usual GitHub flow. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for items deliberately scoped out of past passes, with the reasoning recorded rather than lost.
 
 **CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
 
