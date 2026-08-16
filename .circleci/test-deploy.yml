@@ -1,17 +1,24 @@
 # Continuation config, injected with the freshly-packed dev orb by orb-tools/continue
-# (see .circleci/config.yml). Two contexts must exist in this org before this pipeline
+# (see .circleci/config.yml). One context must exist in this org before this pipeline
 # can run cleanly:
-#   - "orb-publishing"          -- holds the CIRCLE_TOKEN/GHI_TOKEN this orb's own
-#                                  publish jobs need. Standard orb-tools requirement,
-#                                  restrict it to approved branches/users.
-#   - "bitrise-orb-mobile-testing" -- OPTIONAL real (or throwaway) iOS/Android signing
-#                                  fixtures for the two credential-gated integration
-#                                  tests below. It's fine for this context to exist with
-#                                  zero secrets in it -- both gated tests detect the
-#                                  missing env vars and skip themselves cleanly via
-#                                  `circleci-agent step halt` rather than fail. It must
-#                                  still exist, though, or attaching it to a job fails
-#                                  pipeline validation outright.
+#   - "orb-publishing" -- holds the CIRCLE_TOKEN/GHI_TOKEN this orb's own publish jobs
+#                         need. Standard orb-tools requirement, restrict it to approved
+#                         branches/users.
+#
+# There used to be a second, optional "bitrise-orb-mobile-testing" context here, gating
+# the two mobile-signing integration tests below behind real-or-throwaway credentials
+# that were never populated -- both tests self-skipped on every run via `circleci-agent
+# step halt`, so the orb's headline capability (running a real signing Step) had never
+# actually executed. Neither test needs that context anymore:
+#   - test-sign-apk runs unconditionally against a committed, non-secret debug
+#     keystore fixture and a freshly-built unsigned APK fixture, with a real,
+#     independently-verified signature as the pass condition -- see that job's own
+#     comment.
+#   - test-certificate-and-profile-installer generates a throwaway self-signed
+#     certificate with `openssl` and runs unconditionally too, proving the orb-to-Step
+#     contract (download, keychain setup, input mapping) for real -- see that job's own
+#     comment for exactly what it does and does NOT prove (no real Apple-issued
+#     certificate or provisioning profile exists here, and can't be fabricated).
 version: 2.1
 
 orbs:
@@ -196,56 +203,177 @@ jobs:
               echo "OK: '${profile}' refused to run on macOS with a clear message."
             done
 
-  # Tier 1 target, gated: certificate-and-profile-installer needs a real (or throwaway)
-  # .p12 certificate + .mobileprovision profile to do anything meaningful. No such
-  # fixture exists in this sandboxed authoring pass (Rule: "do not invent... mark
-  # anything unverified explicitly" -- fabricating one here would be worse than not
-  # testing it at all), so this job checks for it and skips itself via the documented
-  # `circleci-agent step halt` mechanism, exactly like orb-tools/publish's own
-  # pub_type: production skips (not fails) when no release tag is present.
+  # Tier 1 target, GENUINELY EXERCISED (no context, no real Apple account -- see the
+  # header comment at the top of this file for the history). This proves exactly one
+  # thing for real: certificate-and-profile-installer@1 downloads a certificate_url
+  # (here a file:// URL, confirmed against the Step's own real source that this scheme
+  # is supported), decrypts it with certificate_passphrase, and installs it into the
+  # keychain named by keychain_path -- i.e. this orb's input-mapping and Step-invocation
+  # plumbing for the certificate half of this Step is real, verified, working code.
+  #
+  # What it does NOT prove, and cannot be made to prove without a real Apple Developer
+  # account (which this project does not have and will not fabricate, per this project's
+  # rules): that a provisioning profile installs correctly (none is provided here --
+  # main.go's own validate() only requires KeychainPath/KeychainPassword, so a Step run
+  # with zero provisioning profiles logs "No Provisioning Profile provided" and still
+  # exits 0, meaning this gap can't be surfaced as a test failure no matter what we do
+  # here), or that a real Xcode build would ever trust this certificate (it's
+  # self-signed with `openssl`, not issued by Apple's WWDR CA -- certdownloader/
+  # certificateutil parse and import it exactly like a real one, but nothing here
+  # touches Apple's chain-of-trust at all).
   test-certificate-and-profile-installer:
     executor: bitrise/macos
     steps:
       - checkout
       - run:
-          name: Check for iOS signing test credentials
+          name: Generate a throwaway, self-signed .p12 (openssl) -- NOT a real Apple-issued certificate
           command: |
-            if [ -z "${IOS_TEST_CERTIFICATE_URL:-}" ]; then
-              echo "IOS_TEST_CERTIFICATE_URL is not set in the bitrise-orb-mobile-testing context -- skipping the certificate-and-profile-installer integration test."
-              echo "Add real (or throwaway) iOS signing test fixtures to that context to exercise this test for real."
-              circleci-agent step halt
-            fi
+            set -euo pipefail
+            openssl req -x509 -newkey rsa:2048 \
+              -keyout /tmp/bitrise-orb-ios-test-key.pem \
+              -out /tmp/bitrise-orb-ios-test-cert.pem \
+              -days 1 -nodes \
+              -subj "/CN=bitrise-orb CI self-signed test cert/O=CircleCI Labs/C=US"
+            openssl pkcs12 -export \
+              -inkey /tmp/bitrise-orb-ios-test-key.pem \
+              -in /tmp/bitrise-orb-ios-test-cert.pem \
+              -out /tmp/bitrise-orb-ios-test-cert.p12 \
+              -name bitrise-orb-ci-test \
+              -passout pass:testpass123
+            echo "OK: generated a throwaway self-signed .p12 at /tmp/bitrise-orb-ios-test-cert.p12 (fresh every run, never committed -- this is deliberately NOT a real Apple-issued certificate; see this job's own header comment)."
       - bitrise/step:
           checkout: false
           id: certificate-and-profile-installer@1
           inputs: |
-            certificate_url: $IOS_TEST_CERTIFICATE_URL
-            certificate_passphrase: $IOS_TEST_CERTIFICATE_PASSPHRASE
+            certificate_url: file:///tmp/bitrise-orb-ios-test-cert.p12
+            certificate_passphrase: testpass123
+            install_defaults: "no"
+            keychain_path: /tmp/bitrise-orb-test.keychain-db
+            keychain_password: testpass123
+      - run:
+          name: Verify the throwaway certificate was genuinely imported into the keychain (not merely exit 0)
+          command: |
+            set -euo pipefail
+            test -f /tmp/bitrise-orb-test.keychain-db
+            dump_output="$(security find-certificate -a -c "bitrise-orb CI self-signed test cert" /tmp/bitrise-orb-test.keychain-db 2>&1)"
+            echo "${dump_output}"
+            case "${dump_output}" in
+              *"bitrise-orb CI self-signed test cert"*) ;;
+              *)
+                echo "FAIL: the throwaway certificate was not found in the target keychain after certificate-and-profile-installer ran" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: certificate-and-profile-installer genuinely downloaded (file://), decrypted, and imported our throwaway self-signed .p12 into a real macOS keychain -- proves this orb's input-mapping + Step-invocation for the certificate path. This is NOT proof of a working iOS code-signing identity: no provisioning profile was installed (none exists to install) and this certificate is not trusted by Apple's chain -- see this job's own header comment."
+      - run:
+          name: Clean up the throwaway keychain and certificate material
+          when: always
+          command: |
+            security delete-keychain /tmp/bitrise-orb-test.keychain-db > /dev/null 2>&1 || true
+            rm -f /tmp/bitrise-orb-ios-test-key.pem /tmp/bitrise-orb-ios-test-cert.pem /tmp/bitrise-orb-ios-test-cert.p12
 
-  # Tier 1 target, gated: sign-apk needs a real keystore + an APK to sign. Same
-  # reasoning as above -- present, exercised the moment real fixtures exist in the
-  # context, skipped cleanly until then.
+  # Tier 1 target, GENUINELY EXERCISED (no context needed -- see the header comment at
+  # the top of this file for the history). A debug keystore generated by `keytool`/
+  # `openssl` is not a secret -- Android's own tooling ships the exact same convention
+  # (alias "androiddebugkey", password "android") in every installation -- so the
+  # keystore fixture below is committed to the repo rather than pulled from a context.
+  # sign-apk's own real source (main.go) confirms `keystore_url` accepts a `file://` URL
+  # for local keystores; this test uses that path.
+  #
+  # The APK side is built fresh every run, not committed: `aapt package` (already
+  # installed by the init-stack call below, since sign-apk's own main.go requires the
+  # SAME `aapt` binary via androidSDK.LatestBuildToolPath("aapt") regardless of what
+  # produced the input file) against a tiny committed AndroidManifest.xml fixture
+  # produces the smallest artifact sign-apk will accept: a real, structurally valid,
+  # unsigned APK -- not a fabricated byte layout guessed at without a way to test it.
+  #
+  # The pass condition is a REAL, independently-verified signature, not just a 0 exit
+  # code: `apksigner verify` and `jarsigner -verify` are run against sign-apk's own
+  # output, and required to both confirm the signature AND attribute it to this job's
+  # own throwaway certificate (CN=Android Debug) -- a Step that silently no-op'd would
+  # fail this just as surely as one that errored.
   test-sign-apk:
     executor: bitrise/machine
     steps:
       - checkout
+      - bitrise/init-stack:
+          profile: android-build
       - run:
-          name: Check for Android signing test credentials
+          name: Build a minimal unsigned APK fixture with aapt (built fresh every run, not committed to the repo)
           command: |
-            if [ -z "${ANDROID_TEST_KEYSTORE_URL:-}" ]; then
-              echo "ANDROID_TEST_KEYSTORE_URL is not set in the bitrise-orb-mobile-testing context -- skipping the sign-apk integration test."
-              echo "Add a real (or throwaway) Android keystore + test APK to that context to exercise this test for real."
-              circleci-agent step halt
-            fi
+            set -euo pipefail
+            android_jar="${ANDROID_HOME}/platforms/android-35/android.jar"
+            test -f "${android_jar}"
+            aapt package -f \
+              -M test/fixtures/android-signing/AndroidManifest.xml \
+              -I "${android_jar}" \
+              -F /tmp/bitrise-orb-unsigned-fixture.apk
+            test -s /tmp/bitrise-orb-unsigned-fixture.apk
+            size="$(stat -c%s /tmp/bitrise-orb-unsigned-fixture.apk 2> /dev/null || stat -f%z /tmp/bitrise-orb-unsigned-fixture.apk)"
+            echo "OK: built /tmp/bitrise-orb-unsigned-fixture.apk (${size} bytes, unsigned)"
       - bitrise/step:
           checkout: false
           id: sign-apk@2
           inputs: |
-            android_app: $ANDROID_TEST_APK_PATH
-            keystore_url: $ANDROID_TEST_KEYSTORE_URL
-            keystore_password: $ANDROID_TEST_KEYSTORE_PASSWORD
-            keystore_alias: $ANDROID_TEST_KEYSTORE_ALIAS
-            private_key_password: $ANDROID_TEST_KEY_PASSWORD
+            android_app: /tmp/bitrise-orb-unsigned-fixture.apk
+            keystore_url: file://test/fixtures/android-signing/debug.keystore
+            keystore_password: android
+            keystore_alias: androiddebugkey
+            private_key_password: android
+            page_align: "false"
+      - run:
+          name: Verify the output is REALLY signed -- apksigner verify + jarsigner -verify, not merely a 0 exit code
+          command: |
+            set -euo pipefail
+            if [ -z "${BITRISE_SIGNED_APK_PATH:-}" ]; then
+              echo "FAIL: BITRISE_SIGNED_APK_PATH was not exported by sign-apk@2 -- the Step did not run to completion" >&2
+              exit 1
+            fi
+            echo "Signed APK at: ${BITRISE_SIGNED_APK_PATH}"
+            test -s "${BITRISE_SIGNED_APK_PATH}"
+
+            set +e
+            apksigner_output="$(apksigner verify --verbose --print-certs "${BITRISE_SIGNED_APK_PATH}" 2>&1)"
+            apksigner_exit=$?
+            set -e
+            echo "${apksigner_output}"
+            if [ "${apksigner_exit}" -ne 0 ]; then
+              echo "FAIL: apksigner verify rejected sign-apk's own output (exit ${apksigner_exit}) -- this is not a real signature" >&2
+              exit 1
+            fi
+            case "${apksigner_output}" in
+              *"Verified using v1 scheme (JAR signing): true"* | *"Verified using v2 scheme (APK Signature Scheme v2): true"*) ;;
+              *)
+                echo "FAIL: apksigner verify exited 0 but reported neither v1 nor v2 as true -- unexpected" >&2
+                exit 1
+                ;;
+            esac
+            case "${apksigner_output}" in
+              *"CN=Android Debug"*) ;;
+              *)
+                echo "FAIL: the verified certificate's DN did not match this job's own throwaway fixture keystore (CN=Android Debug) -- signed by the wrong key, or not really signed" >&2
+                exit 1
+                ;;
+            esac
+
+            set +e
+            jarsigner_output="$(jarsigner -verify -verbose -certs "${BITRISE_SIGNED_APK_PATH}" 2>&1)"
+            jarsigner_exit=$?
+            set -e
+            echo "${jarsigner_output}"
+            if [ "${jarsigner_exit}" -ne 0 ]; then
+              echo "FAIL: jarsigner -verify rejected sign-apk's own output (exit ${jarsigner_exit})" >&2
+              exit 1
+            fi
+            case "${jarsigner_output}" in
+              *"jar verified"*) ;;
+              *)
+                echo "FAIL: jarsigner did not print 'jar verified' on sign-apk's own output" >&2
+                exit 1
+                ;;
+            esac
+
+            echo "OK: sign-apk@2 produced a genuinely, independently verifiable signed APK -- both apksigner verify and jarsigner -verify confirm it, and both attribute the signature to this job's own throwaway fixture keystore (CN=Android Debug)."
 
   # Regression test for shell-correctness review Finding #1 (CRITICAL -- arbitrary
   # command execution). collect-outputs.sh validates every output KEY/ALIAS against a
@@ -947,11 +1075,9 @@ workflows:
 
       - test-certificate-and-profile-installer:
           filters: *filters
-          context: bitrise-orb-mobile-testing
 
       - test-sign-apk:
           filters: *filters
-          context: bitrise-orb-mobile-testing
 
       - test-collect-outputs-hijack-regression:
           filters: *filters

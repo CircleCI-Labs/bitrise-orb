@@ -10,13 +10,23 @@ This orb runs a single **[Bitrise Step](https://docs.bitrise.io/en/bitrise-ci/re
 CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
 
 -   ✅ Created by engineers @ CircleCI
--   ⚠️ **Not yet proven against a real, credential-bearing mobile-signing Step.** The two
-    integration tests built specifically to exercise a real StepLib Step
-    (`certificate-and-profile-installer`, `sign-apk`) are gated on a `bitrise-orb-mobile-testing`
-    context that currently holds no secrets, and self-skip cleanly rather than fail --
-    see "Gotchas worth knowing" below. Everything else in this repo (the plumbing:
-    parameter handling, output export, the stack bootstrap, every security-regression
-    test) runs green, unauthenticated, on every commit.
+-   ⚠️ **Android signing is genuinely proven; iOS signing is proven only partway, honestly.**
+    `test-sign-apk` runs unconditionally (no context, no credentials) against a committed,
+    non-secret debug keystore (the same alias/password every Android dev tool ships by
+    default) and a freshly-built unsigned APK fixture, then requires `apksigner verify`
+    AND `jarsigner -verify` to both confirm the output is really signed and attribute it
+    to that fixture's own certificate -- not just a 0 exit code. `test-certificate-and-
+    profile-installer` also runs unconditionally, against a throwaway self-signed
+    certificate generated fresh with `openssl` every run, and verifies via `security
+    find-certificate` that the Step really downloaded, decrypted, and imported it into a
+    real macOS keychain -- proving this orb's input-mapping and Step-invocation for the
+    certificate half of that Step is real, working code. It does **not** prove a
+    provisioning-profile install (none is exercised: a real one needs an Apple Developer
+    account this project doesn't have and won't fabricate) or that Xcode would ever trust
+    a self-signed, non-Apple-issued certificate. See both jobs' own comments in
+    `.circleci/test-deploy.yml` for the exact boundary. Everything else in this repo (the
+    plumbing: parameter handling, output export, the stack bootstrap, every
+    security-regression test) runs green, unauthenticated, on every commit too.
 -   ❌ **not** officially supported by CircleCI support
 
 ---
@@ -461,7 +471,8 @@ By contrast, **iOS/Android code signing itself is not a hard blocker**: `xcode-a
 
 ## Gotchas worth knowing before your first run
 
-- **macOS requires Homebrew.** `bitrise setup` hard-requires it even in minimal mode. CircleCI's standard macOS executor images ship it, so this is low-risk, but it's the first thing to check if `install` fails on a custom image. This repo's own CI runs an unconditional (no-credentials-needed) `bitrise/install` + trivial Step on `bitrise/macos` on every commit specifically so a broken macOS install path can't hide behind the credential-gated signing tests below.
+- **macOS requires Homebrew.** `bitrise setup` hard-requires it even in minimal mode. CircleCI's standard macOS executor images ship it, so this is low-risk, but it's the first thing to check if `install` fails on a custom image. This repo's own CI runs an unconditional (no-credentials-needed) `bitrise/install` + trivial Step on `bitrise/macos` on every commit specifically so a broken macOS install path can't hide behind the mobile-signing tests below.
+- **The two mobile-signing integration tests (`test-certificate-and-profile-installer`, `test-sign-apk` in `.circleci/test-deploy.yml`) use throwaway, non-secret fixtures, not a CircleCI context.** Android's is a committed debug keystore (`test/fixtures/android-signing/`, `keytool`/`openssl`-generated, the same alias/password Android's own tooling defaults to); iOS's is a self-signed `.p12` generated fresh every run with `openssl`. Neither is a real Apple-issued certificate or a substitute for one -- see the Disclaimer above and each job's own comment for exactly what each does and does not prove.
 - **This orb runs a Step NATIVELY, with no container boundary -- unlike a `docker run`-based bridge.** A Bitrise Step (or a `git::`/`path::` reference to one) executes directly in the job's own shell/process, with everything the job has: the full checkout, every sourced context/project secret, the network, and on `machine`, the Docker socket and host filesystem outright. This is inherent to how `bitrise run` works, not something this orb adds or could sandbox away -- treat "run a Bitrise Step through this orb" as exactly as trusting as "run this Step's code directly in this job," because that's what it is.
 - **The synthesized `bitrise.yml` (`config-path`, default `.bitrise-orb.generated.yml`) contains every resolved Step input/output value, including secrets, once `create-config` has run.** It's written inside your checkout on purpose (so `path::`-relative Step references resolve), but that also means a `persist_to_workspace`/`store_artifacts` pattern pointed broadly at `.` elsewhere in the same job will durably persist that file, plaintext, as a workspace object or artifact -- somewhere CircleCI's console log masking doesn't reach the same way it reaches stdout. Scope any broad artifact/workspace glob to exclude it if you use one.
 - **This orb's console output never dumps that file by default** (`debug-dump-config`, default `false`, gates it) -- but the file on disk always has the resolved values regardless of whether you ever print it, which is what the bullet above is really about.

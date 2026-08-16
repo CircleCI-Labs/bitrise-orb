@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fixture input for `aapt package` in the test-sign-apk job (.circleci/test-deploy.yml).
+
+  Not a real app: it declares no application code, no dex, no resources -- just the
+  smallest manifest `aapt package` will compile into a structurally valid, unsigned
+  .apk. That .apk is what gets fed into the real `sign-apk` Bitrise Step so the job can
+  prove the Step's own zipalign + apksigner path for real (see that job's comments for
+  what "real" means here and what it doesn't cover).
+
+  minSdkVersion is deliberately low (21) so apksigner's own default scheme selection
+  includes the legacy v1 (JAR) signing scheme alongside v2/v3 -- the test verifies the
+  output with both `apksigner verify` and `jarsigner -verify`, and jarsigner only
+  understands v1.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.circleci.bitriseorb.signingfixture"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35" />
+    <application android:label="bitrise-orb signing fixture" />
+</manifest>
