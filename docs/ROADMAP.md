@@ -71,15 +71,17 @@ cache round-trip, so DLC stays off by default everywhere in this orb except the 
 whose image is 10+GB -- there, layer-level reuse is worth the round-trip. This orb doesn't
 hand-roll its own `docker save`/`load` cache on top of DLC anywhere, because that would be
 redundant with, and strictly worse than (all-or-nothing per exact tag vs. DLC's per-layer reuse),
-a feature that already ships. See the README's "A third, opt-in executor" section for the current
-user-facing guidance.
+a feature that already ships. See "A third, opt-in executor" in
+[GETTING-STARTED.md](GETTING-STARTED.md#a-third-opt-in-executor-bitriseandroid-toolchain) for the
+current user-facing guidance.
 
 ### Command-split decisions
 
 `step` decomposes into five commands (`install` -> `map-env` -> `create-config` ->
 `collect-outputs` -> `run-bitrise`) rather than one monolithic script, specifically so a
-hand-rolled job chaining several Bitrise Steps that share on-disk/keychain state (see "Chaining
-two Bitrise Steps" in the README) can skip the stages an earlier call in the same job already did
+hand-rolled job chaining several Bitrise Steps that share on-disk/keychain state (see
+["Chaining two Bitrise Steps"](GETTING-STARTED.md#chaining-two-bitrise-steps-that-share-machine-state)
+in GETTING-STARTED.md) can skip the stages an earlier call in the same job already did
 (`skip-install`/`skip-map-env`) instead of redoing them. The two ordering constraints that fall
 out of this split are load-bearing, not incidental: `map-env` must run before `create-config`
 (secrets resolve via `circleci env subst` against whatever `$BASH_ENV` holds *at that moment*,
@@ -87,8 +89,8 @@ and `map-env` is what populates `$BITRISE_DEPLOY_DIR`/etc.), and `collect-output
 `run-bitrise` (it only *appends* an output-exporting Step to the not-yet-executed synthesized
 config; nothing has run yet when it does). `init-stack`'s own resolve -> restore_cache -> install
 -> save_cache shape deliberately mirrors `install.yml`'s for the same reason (a reference pattern
-worth reusing), even though the two don't share code -- see the README's "How it works" and "Stack
-bootstrap" sections for the full mechanism.
+worth reusing), even though the two don't share code -- see "How it works" and "Stack bootstrap"
+in [ARCHITECTURE.md](ARCHITECTURE.md) for the full mechanism.
 
 ### Workspace / parallelism fit
 
@@ -100,8 +102,8 @@ downstream. **Branching which jobs *run*, based on an upstream job's runtime out
 considered and explicitly not solved here** -- CircleCI has no native construct for a genuine
 workflow-level conditional at all, orb or no orb; the closest real mechanism is a setup workflow
 plus the `circleci/continuation` orb, and there is no lighter-weight substitute available today.
-This orb doesn't invent one. See the README's "Passing data between jobs" section for the current
-worked examples of both mechanisms.
+This orb doesn't invent one. See ["Passing data between jobs"](GETTING-STARTED.md#passing-data-between-jobs)
+in GETTING-STARTED.md for the current worked examples of both mechanisms.
 
 ### Vendor-image layering
 
@@ -114,5 +116,5 @@ published 2024-01-08, i.e. stale by design, not something worth adopting as this
 layering strategy (see item 2 above). The default recommendation is `bitrise/machine` plus
 `init-stack`'s pinned, checksum-verified, continuously-researched subset instead -- current where
 the vendor image is stale, and scoped to what real Steps actually call rather than a whole stack
-mirror. See the README's "A third, opt-in executor" and "Stack bootstrap" sections for the
-user-facing form of this decision.
+mirror. See ["A third, opt-in executor"](GETTING-STARTED.md#a-third-opt-in-executor-bitriseandroid-toolchain)
+and ["Stack bootstrap"](ARCHITECTURE.md#stack-bootstrap) for the user-facing form of this decision.
